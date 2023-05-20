@@ -1,0 +1,10 @@
+/target
+/temp
+/GCCSH
+.dosemu
+.vscode
+T_BAT.PRG
+/rust-dis/output
+/rust-dis/target
+main.zip
+/rust-dis/mono.txt

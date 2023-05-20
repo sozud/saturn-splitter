@@ -1,0 +1,16 @@
+# build container and tag it as sotn-build:latest
+# docker build --tag sotn-build:latest . 
+
+# launch container and mount current directory under /sotn 
+# docker run --rm -it -v $(pwd):/sotn sotn-build /bin/bash
+
+# cd /sotn
+
+# docker build --tag binutils-sh-elf:latest -f bin_docker .
+
+FROM debian:bookworm
+
+# ARG DEBIAN_FRONTEND=noninteractive
+
+RUN apt-get update && \
+    apt-get install binutils-sh-elf gcc-sh-elf -y
