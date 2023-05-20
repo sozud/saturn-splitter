@@ -9,7 +9,6 @@ RUN apt-get update && \
     apt-get update && \
     apt-get install -y dosemu2;
 
-# sdf
 ARG USERNAME=user
 ARG USER_UID=1000
 ARG USER_GID=$USER_UID
@@ -22,29 +21,12 @@ RUN groupadd --gid $USER_GID $USERNAME \
     && echo $USERNAME ALL=\(root\) NOPASSWD:ALL > /etc/sudoers.d/$USERNAME \
     && chmod 0440 /etc/sudoers.d/$USERNAME
 
-# RUN useradd -ms /bin/bash myuser && echo "myuser:mypassword" | chpasswd
-# USER myuser
-
 RUN mkdir -p /etc/dosemu/drives/c && chmod -R 777 /etc/dosemu/drives/c
-
-
-
-
-# RUN groupadd --gid 1000 node \
-#     && useradd --uid 1000 --gid node --shell /bin/bash --create-home node
-
-# C is output dir... I guess
-# well let's copy it outside I suppose.
-
-# RUN add-apt-repository universe && apt-get install binutils-sh-elf
 
 COPY GCCSH /etc/dosemu/drives/c
 
 RUN chmod -R 777 /etc/dosemu/drives/c
-# COPY dosemurc /app/
 
 USER $USERNAME
 
 WORKDIR /etc/dosemu/drives/c
-
-#ENTRYPOINT ["dosemu -dumb -f /yaxpeax/dosemurc"]
