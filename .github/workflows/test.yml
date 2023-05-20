@@ -57,11 +57,11 @@ jobs:
       # - name: Test
       #   run: cd rust-dis && cargo test
       - name: Build docker containers
-        run: sh scripts/build_docker.sh
+        run: sh scripts/docker/build_docker.sh
       - name: Compile
-        run: sh scripts/compile_docker.sh   
+        run: sh scripts/compile_dosemu/compile_docker.sh   
       - name: Compare
-        run: sh scripts/compare_docker.sh
+        run: sh scripts/compile_dosemu/compare_docker.sh
   #     - name: Extract dependencies
   #       run: make extract_disk
   #     - name: Split game data
