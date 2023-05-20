@@ -9,4 +9,4 @@ cp  ./scripts/compile_dosemu/compile_dosemu.sh ./temp/
 chmod +x ./temp/compile_dosemu.sh
 
 # execute in docker
-docker run -it --rm -v $(pwd)/:/pwd -w /pwd/temp dosemu:latest /bin/bash -c "./compile_dosemu.sh"
+docker run --rm -v $(pwd)/:/pwd -w /pwd/temp dosemu:latest /bin/bash -c "./compile_dosemu.sh"
