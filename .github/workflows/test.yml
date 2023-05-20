@@ -42,6 +42,7 @@ jobs:
         with:
           repository: sozud/saturn-splitter-deps
           token: ${{ secrets.ACCESS_TOKEN }}
+          path: 'saturn-splitter-deps'
       - name: Deps setup
         run: cp saturn-splitter-deps/T_BAT.PRG .
       # - name: Setting up dependencies
