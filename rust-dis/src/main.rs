@@ -1018,7 +1018,7 @@ fn main() {
                 if branch_labels.contains_key(&i.try_into().unwrap()) {
                     if let Some(value) = branch_labels.get(&i.try_into().unwrap()) {
                         // Use the label
-                                    if let Some(func) = disassembled_funcs.get_mut(&(start_address as u32)) {
+                        if let Some(func) = disassembled_funcs.get_mut(&(start_address as u32)) {
                             func.text.push_str(&format!("{}:\n", value));
                             monolithic.push_str(&format!("{}:\n", value));
                         }
@@ -1052,7 +1052,7 @@ fn main() {
                             }
 
                             // skip next instructino since we used it
-        
+
                             skip_next = true;
                         }
                         continue;
@@ -1067,13 +1067,14 @@ fn main() {
                     &mut data_labels,
                     &mut branch_labels,
                 );
-                 if let Some(func) = disassembled_funcs.get_mut(&(start_address as u32)) {
+                if let Some(func) = disassembled_funcs.get_mut(&(start_address as u32)) {
                     func.text
                         .push_str(&format!("/* 0x{:08X} */ {}\n", i, string));
                     monolithic.push_str(&format!("/* 0x{:08X} */ {}\n", i, string));
                 }
             }
             emit_c_file(&functions);
+            std::fs::create_dir_all("output/funcs").expect("Failed to create directories.");
             for (addr, df) in disassembled_funcs {
                 emit_asm_file(format!("output/funcs/f_{:05X}.s", df.addr), df.text);
             }
