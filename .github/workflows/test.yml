@@ -37,13 +37,13 @@ jobs:
         with:
           ref: ${{ github.ref }}
           submodules: false
-      # - name: Clone dependencies
-      #   uses: actions/checkout@v3
-      #   with:
-      #     repository: xeeynamo/sotn-decomp-dependencies
-      #     ref: ${{ matrix.dependency }}
-      #     token: ${{ secrets.SOTN_DECOM_PRIVATE_REPO_TOKEN }}
-      #     path: 'disks/dependencies'
+      - name: Clone dependencies
+        uses: actions/checkout@v3
+        with:
+          repository: sozud/saturn-splitter-deps
+          token: ${{ secrets.ACCESS_KEY }}
+      - name: Deps setup
+        run: cp saturn-splitter-deps/T_BAT.PRG .
       # - name: Setting up dependencies
       #   working-directory: disks
       #   run: |
@@ -54,8 +54,8 @@ jobs:
         run: sh scripts/get_gccsh.sh
       - name: Build
         run: cd rust-dis && cargo build --release
-      # - name: Test
-      #   run: cd rust-dis && cargo test
+      - name: Extract
+        run: cd rust-dis && cargo run
       - name: Build docker containers
         run: sh scripts/docker/build_docker.sh
       - name: Compile
