@@ -217,19 +217,57 @@ fn match_d_f(
                 let addr = (((op & 0xff) + 0xffffff00).wrapping_mul(2))
                     .wrapping_add(v_addr)
                     .wrapping_add(4);
-                string.push_str(&format!("bf.s 0x{:08X}", addr));
+                // string.push_str(&format!("bf.s 0x{:08X}", addr));
+                if branch_labels.contains_key(&addr) {
+                    if let Some(value) = branch_labels.get(&addr) {
+                        // Use the label
+                        string.push_str(&format!("bf.s {}", value));
+                    }
+                } else {
+                    // use an address
+                    string.push_str(&format!("bf.s 0x{:08X}", addr));
+                }
             } else {
                 let addr = ((op & 0xff) * 2) + v_addr + 4;
-                string.push_str(&format!("bf.s 0x{:08X}", addr));
+                // string.push_str(&format!("bf.s 0x{:08X}", addr));
+                if branch_labels.contains_key(&addr) {
+                    if let Some(value) = branch_labels.get(&addr) {
+                        // Use the label
+                        string.push_str(&format!("bf.s {}", value));
+                    }
+                } else {
+                    // use an address
+                    string.push_str(&format!("bf.s 0x{:08X}", addr));
+                }
             }
         }
         0x8900 => {
             if (op & 0x80) == 0x80 {
                 let addr = (((op & 0xff) + 0xffffff00).wrapping_mul(2)) + v_addr + 4;
-                string.push_str(&format!("bt 0x{:08X}", addr));
+                // string.push_str(&format!("bt 0x{:08X}", addr));
+
+                if branch_labels.contains_key(&addr) {
+                    if let Some(value) = branch_labels.get(&addr) {
+                        // Use the label
+                        string.push_str(&format!("bt {}", value));
+                    }
+                } else {
+                    // use an address
+                    string.push_str(&format!("bt 0x{:08X}", addr));
+                }
             } else {
                 let addr = ((op & 0xff) * 2) + v_addr + 4;
-                string.push_str(&format!("bt 0x{:08X}", addr));
+                // string.push_str(&format!("bt 0x{:08X}", addr));
+
+                if branch_labels.contains_key(&addr) {
+                    if let Some(value) = branch_labels.get(&addr) {
+                        // Use the label
+                        string.push_str(&format!("bt {}", value));
+                    }
+                } else {
+                    // use an address
+                    string.push_str(&format!("bt 0x{:08X}", addr));
+                }
             }
         }
         0x8d00 => {
