@@ -1,3 +1,5 @@
+// why is 14c0 made into data?
+
 use serde_derive::Deserialize;
 use serde_yaml;
 use std::collections::HashMap;
@@ -184,10 +186,30 @@ fn match_d_f(
                 let addr = (((op & 0xff) + 0xffffff00).wrapping_mul(2))
                     .wrapping_add(v_addr)
                     .wrapping_add(4);
-                string.push_str(&format!("bf 0x{:08X}", addr));
+                // string.push_str(&format!("bf 0x{:08X}", addr));
+
+                if branch_labels.contains_key(&addr) {
+                    if let Some(value) = branch_labels.get(&addr) {
+                        // Use the label
+                        string.push_str(&format!("bf {}", value));
+                    }
+                } else {
+                    // use an address
+                    string.push_str(&format!("bf 0x{:08X}", addr));
+                }
             } else {
                 let addr = ((op & 0xff) * 2) + v_addr + 4;
-                string.push_str(&format!("bf 0x{:08X}", addr));
+                // string.push_str(&format!("bf 0x{:08X}", addr));
+
+                if branch_labels.contains_key(&addr) {
+                    if let Some(value) = branch_labels.get(&addr) {
+                        // Use the label
+                        string.push_str(&format!("bf {}", value));
+                    }
+                } else {
+                    // use an address
+                    string.push_str(&format!("bf 0x{:08X}", addr));
+                }
             }
         }
         0x8f00 => {
@@ -213,10 +235,30 @@ fn match_d_f(
         0x8d00 => {
             if (op & 0x80) == 0x80 {
                 let addr = (((op & 0xff) + 0xffffff00) * 2) + v_addr + 4;
-                string.push_str(&format!("bt.s 0x{:08X}", addr));
+                // string.push_str(&format!("bt.s 0x{:08X}", addr));
+
+                if branch_labels.contains_key(&addr) {
+                    if let Some(value) = branch_labels.get(&addr) {
+                        // Use the label
+                        string.push_str(&format!("bt.s {}", value));
+                    }
+                } else {
+                    // use an address
+                    string.push_str(&format!("bt.s 0x{:08X}", addr));
+                }
             } else {
                 let addr = ((op & 0xff) * 2) + v_addr + 4;
-                string.push_str(&format!("bt.s 0x{:08X}", addr));
+                // string.push_str(&format!("bt.s 0x{:08X}", addr));
+
+                if branch_labels.contains_key(&addr) {
+                    if let Some(value) = branch_labels.get(&addr) {
+                        // Use the label
+                        string.push_str(&format!("bt.s {}", value));
+                    }
+                } else {
+                    // use an address
+                    string.push_str(&format!("bt.s 0x{:08X}", addr));
+                }
             }
         }
         _ => match_d12_f(v_addr, op, mode, string, data_labels, branch_labels),
@@ -766,6 +808,12 @@ fn find_data_labels(v_addr: u32, op: u32, data_labels: &mut HashMap<u32, DataLab
         add_data_label(addr, 2, data_labels);
     } else if (op & 0xf000) == 0xd000 {
         let target = ((op & 0xff) * 4 + 4 + v_addr) & 0xfffffffc;
+
+        // TODO fixme this shouln't be marked as data
+        if (target == 0x14C0) {
+            println!("problem {:08X}", v_addr);
+            return;
+        }
         add_data_label(target, 4, data_labels);
     }
 }
@@ -830,6 +878,8 @@ use std::io::Write;
 struct FunctionPair {
     file: String,
     name: String,
+    start: u32,
+    end: u32,
 }
 
 fn emit_c_file(functions: &Vec<FunctionPair>, output_path: String) {
@@ -849,6 +899,7 @@ fn emit_asm_file(filename: String, data: String) {
 
 struct DisassembledFunc {
     addr: u32,
+    end: u32,
     text: String,
     data: bool,
 }
@@ -865,12 +916,19 @@ fn handle_code_section(
     let mut functions = Vec::<FunctionPair>::new();
 
     for r in &ranges {
-        println!("{:08X} {:08X}", r.phys_start, r.phys_end);
+        println!(
+            "{:08X} {:08X} len: {}",
+            r.phys_start,
+            r.phys_end,
+            r.phys_end - r.phys_start
+        );
         let mut name = String::new();
         name.push_str(&format!("f_{:05X}", r.phys_start));
         let pair = FunctionPair {
             file: "funcs".to_string(),
             name: name,
+            start: r.phys_start,
+            end: r.phys_end,
         };
         functions.push(pair);
     }
@@ -900,6 +958,7 @@ fn handle_code_section(
             .entry(f.phys_start)
             .or_insert(DisassembledFunc {
                 addr: f.phys_start,
+                end: f.phys_end,
                 text: "".to_string(),
                 data: f.is_data,
             });
@@ -1142,8 +1201,14 @@ fn handle_segments(file_contents: &Vec<u8>, config: &Config) {
             .expect("Failed to write to file.");
         } else {
             for pair in &processed_section.functions {
-                writeln!(&mut file, "INCLUDE_ASM(\"{}\", {});", pair.file, pair.name)
-                    .expect("Failed to write to file.");
+                // assume this is a empty function if the size is 8
+                if pair.end - pair.start == 8 {
+                    writeln!(&mut file, "void {}() {{}}", pair.name)
+                        .expect("Failed to write to file.");
+                } else {
+                    writeln!(&mut file, "INCLUDE_ASM(\"{}\", {});", pair.file, pair.name)
+                        .expect("Failed to write to file.");
+                }
             }
         }
     }
