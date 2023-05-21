@@ -3,10 +3,10 @@ options:
   basename:     tt_000
   base_path:    ..
   build_path:   build/us
-  target_path:  disks/us/SERVANT/TT_000.BIN
-  asm_path:     asm/us/servant/tt_000
+  target_path:  ../T_BAT.PRG
+  asm_path:     output/funcs
   asset_path:   assets/servant/tt_000
-  src_path:     src/servant/tt_000
+  src_path:     output
   compiler:     GCC
   symbol_addrs_path:    config/generated.symbols.us.tt_000.txt
   undefined_funcs_auto_path: config/undefined_funcs_auto.us.tt_000.txt
@@ -27,6 +27,13 @@ segments:
     subsegments:
       - start: 0x0
         type: data
+        file: 60
+        end: 0x5F
       - start: 0x60
         type: c
         file: 60
+        end: 0x2857
+      - start: 0x2858
+        type: data
+        file: 60
+        end: 0x7000

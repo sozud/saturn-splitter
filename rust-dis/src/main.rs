@@ -1,4 +1,3 @@
-use serde::Deserialize;
 use serde_derive::Deserialize;
 use serde_yaml;
 use std::collections::HashMap;
@@ -70,9 +69,9 @@ fn match_nd8_f(
             // "mov.l @(0x%03X, pc), r%d"
             let v_addr_aligned = (v_addr & 0xfffffffc) == 0;
             // this post explains part of issue. https://dcemulation.org/phpBB/viewtopic.php?style=41&t=105661
-            let mut target_a = ((op & 0xff) * 4 + 4);
+            let mut target_a = (op & 0xff) * 4 + 4;
             let target_b = ((op & 0xff) * 4 + 4 + v_addr) & 0xfffffffc;
-            let test = ((op & 0xff) * 4 + 4 + v_addr);
+            let test = (op & 0xff) * 4 + 4 + v_addr;
 
             // gas alignment issue.
             if (test & 3) == 2 {
@@ -626,13 +625,6 @@ struct FunctionRange {
 }
 
 fn find_funcs(vec: &Vec<u8>, ranges: &mut Vec<FunctionRange>) {
-    let range = FunctionRange {
-        phys_start: 0,
-        phys_end: 0x60 - 2,
-        is_data: true,
-    };
-    ranges.push(range);
-
     let mut rts_pos: Vec<u32> = Vec::new();
     for i in (0..vec.len()).step_by(2) {
         let instr = (vec[i] as u32) << 8 | vec[i + 1] as u32;
@@ -674,14 +666,6 @@ fn find_funcs(vec: &Vec<u8>, ranges: &mut Vec<FunctionRange>) {
             ranges.push(range);
         }
     }
-
-    // add ending data
-    let range = FunctionRange {
-        phys_start: 0x2850,
-        phys_end: vec.len() as u32,
-        is_data: true,
-    };
-    ranges.push(range);
 }
 
 fn infunc(i: u32, ranges: &Vec<FunctionRange>) -> (bool, u32) {
@@ -711,6 +695,16 @@ fn infunc_extended(i: u32, ranges: &Vec<FunctionRange>) -> (bool, u32) {
             // in func rodata
             return (true, current_func.phys_start);
         }
+    }
+
+    (false, 0)
+}
+
+fn is_beyond_last_func(i: u32, ranges: &Vec<FunctionRange>) -> (bool, u32) {
+    let last_func = &ranges[ranges.len() - 1];
+
+    if i > last_func.phys_end {
+        return (true, last_func.phys_start);
     }
 
     (false, 0)
@@ -798,6 +792,7 @@ struct Options {
 #[derive(Debug, Deserialize)]
 struct Subsegment {
     start: u64,
+    end: u64,
     #[serde(rename = "type")]
     segment_type: Option<String>,
     file: Option<String>,
@@ -818,7 +813,7 @@ struct Config {
     segments: Option<Vec<Segment>>,
 }
 
-fn parse_yaml2() {
+fn parse_yaml2() -> Config {
     // Read the YAML configuration file
     let mut file = File::open("config.yaml").expect("Failed to open the file.");
     let mut contents = String::new();
@@ -828,64 +823,7 @@ fn parse_yaml2() {
     // Parse the YAML into a Config struct
     let config: Config = serde_yaml::from_str(&contents).expect("Failed to parse YAML.");
 
-    // Access the 'options' section
-    let options = config.options;
-
-    // Access specific fields within 'options'
-    let platform = options.platform;
-    let basename = options.basename;
-    let base_path = options.base_path;
-    let build_path = options.build_path;
-    let target_path = options.target_path;
-    let asm_path = options.asm_path;
-    let asset_path = options.asset_path;
-    let src_path = options.src_path;
-    let compiler = options.compiler;
-    let symbol_addrs_path = options.symbol_addrs_path;
-    let undefined_funcs_auto_path = options.undefined_funcs_auto_path;
-    let undefined_syms_auto_path = options.undefined_syms_auto_path;
-    let find_file_boundaries = options.find_file_boundaries;
-    let use_legacy_include_asm = options.use_legacy_include_asm;
-    let migrate_rodata_to_functions = options.migrate_rodata_to_functions;
-
-    println!("Platform: {}", platform);
-    println!("Basename: {}", basename);
-    println!("Base Path: {}", base_path);
-    println!("Build Path: {}", build_path);
-    println!("Target Path: {}", target_path);
-    println!("ASM Path: {}", asm_path);
-    println!("Asset Path: {}", asset_path);
-    println!("Source Path: {}", src_path);
-    println!("Compiler: {}", compiler);
-    println!("Symbol Addrs Path: {}", symbol_addrs_path);
-    println!("Undefined Funcs Auto Path: {}", undefined_funcs_auto_path);
-    println!("Undefined Syms Auto Path: {}", undefined_syms_auto_path);
-    println!("Find File Boundaries: {}", find_file_boundaries);
-    println!("Use Legacy Include ASM: {}", use_legacy_include_asm);
-    println!(
-        "Migrate RODATA to Functions: {}",
-        migrate_rodata_to_functions
-    );
-
-    // Access the 'segments' section
-    if let Some(segments) = config.segments {
-        for segment in segments {
-            println!("Segment Name: {}", segment.name);
-            println!("Segment Type: {}", segment.segment_type);
-            println!("Segment Start: {}", segment.start);
-
-            if let Some(subsegments) = segment.subsegments {
-                for subsegment in subsegments {
-                    println!(
-                        "{} {} {}",
-                        subsegment.start,
-                        subsegment.segment_type.unwrap_or("Unknown".to_string()),
-                        subsegment.file.unwrap_or("Unknown".to_string())
-                    );
-                }
-            }
-        }
-    }
+    return config;
 }
 use std::io::Write;
 
@@ -894,8 +832,8 @@ struct FunctionPair {
     name: String,
 }
 
-fn emit_c_file(functions: &Vec<FunctionPair>) {
-    let filename = "output/output.c";
+fn emit_c_file(functions: &Vec<FunctionPair>, output_path: String) {
+    let filename = format!("{}/output.c", output_path);
     let mut file = std::fs::File::create(filename).expect("Failed to create file.");
     writeln!(&mut file, "#include \"inc_asm.h\"").expect("Failed to write to file.");
     for pair in functions {
@@ -909,182 +847,318 @@ fn emit_asm_file(filename: String, data: String) {
     writeln!(&mut file, "{}", data).expect("Failed to write to file.");
 }
 
-fn main() {
-    parse_yaml2();
-    match read_file_to_vec("../T_BAT.PRG") {
-        Ok(file_contents) => {
-            let len = file_contents.len();
-            let mut ranges = Vec::<FunctionRange>::new();
-            find_funcs(&file_contents, &mut ranges);
+struct DisassembledFunc {
+    addr: u32,
+    text: String,
+    data: bool,
+}
 
-            let mut functions = Vec::<FunctionPair>::new();
+fn handle_code_section(
+    file_contents: &Vec<u8>,
+    config: &Config,
+    section_end: u64,
+) -> (Vec<FunctionPair>, HashMap<u32, DisassembledFunc>) {
+    let len = file_contents.len();
+    let mut ranges = Vec::<FunctionRange>::new();
+    find_funcs(&file_contents, &mut ranges);
 
-            for r in &ranges {
-                println!("{:08X} {:08X}", r.phys_start, r.phys_end);
-                let mut name = String::new();
-                name.push_str(&format!("f_{:05X}", r.phys_start));
-                let pair = FunctionPair {
-                    file: "funcs".to_string(),
-                    name: name,
-                };
-                functions.push(pair);
+    let mut functions = Vec::<FunctionPair>::new();
+
+    for r in &ranges {
+        println!("{:08X} {:08X}", r.phys_start, r.phys_end);
+        let mut name = String::new();
+        name.push_str(&format!("f_{:05X}", r.phys_start));
+        let pair = FunctionPair {
+            file: "funcs".to_string(),
+            name: name,
+        };
+        functions.push(pair);
+    }
+
+    let mut data_labels = HashMap::<u32, DataLabel>::new();
+    let mut branch_labels = HashMap::<u32, String>::new();
+
+    for i in (0..len).step_by(2) {
+        let ii = i as usize;
+        let instr: u32 = ((file_contents[ii] as u32) << 8) | file_contents[ii + 1] as u32;
+
+        let (is_in_func, start_address) = infunc(i as u32, &ranges);
+
+        if !is_in_func {
+            continue;
+        }
+
+        find_branch_labels(i.try_into().unwrap(), instr, &mut branch_labels);
+        find_data_labels(i.try_into().unwrap(), instr, &mut data_labels);
+    }
+
+    let mut disassembled_funcs = HashMap::<u32, DisassembledFunc>::new();
+
+    // create emtpy ones for all funcs
+    for f in &ranges {
+        disassembled_funcs
+            .entry(f.phys_start)
+            .or_insert(DisassembledFunc {
+                addr: f.phys_start,
+                text: "".to_string(),
+                data: f.is_data,
+            });
+    }
+
+    let mut monolithic = String::new();
+
+    let mut skip_next = false;
+
+    for i in (0..len).step_by(2) {
+        if skip_next {
+            skip_next = false;
+            continue;
+        }
+
+        let ii = i as usize;
+        let instr: u32 = ((file_contents[ii] as u32) << 8) | file_contents[ii + 1] as u32;
+
+        let (is_in_func, start_address) = infunc(i as u32, &ranges);
+
+        // the last function needs to emit data up until the next section
+
+        let (is_in_func_extended, start_address_extended) = infunc_extended(i as u32, &ranges);
+
+        let (beyond_last_func, beyond_addr) = is_beyond_last_func(i as u32, &ranges);
+
+        if beyond_last_func {
+            if let Some(func) = disassembled_funcs.get_mut(&(beyond_addr as u32)) {
+                func.text
+                    .push_str(&format!("/* 0x{:08X} */ .word 0x{:04X}\n", i, instr));
             }
 
-            let mut data_labels = HashMap::<u32, DataLabel>::new();
-            let mut branch_labels = HashMap::<u32, String>::new();
-
-            for i in (0..len).step_by(2) {
-                let ii = i as usize;
-                let instr: u32 = ((file_contents[ii] as u32) << 8) | file_contents[ii + 1] as u32;
-
-                let (is_in_func, start_address) = infunc(i as u32, &ranges);
-
-                if !is_in_func {
-                    continue;
-                }
-
-                find_branch_labels(i.try_into().unwrap(), instr, &mut branch_labels);
-                find_data_labels(i.try_into().unwrap(), instr, &mut data_labels);
+            if ii as u64 >= section_end - 2 {
+                break;
             }
+            continue;
+        }
 
-            struct DisassembledFunc {
-                addr: u32,
-                text: String,
-                data: bool,
-            };
+        if !is_in_func && is_in_func_extended {
+            // data after function, emit for individual files
+            monolithic.push_str(&format!("/* 0x{:08X} */ .word 0x{:04X}\n", i, instr));
 
-            let mut disassembled_funcs = HashMap::<u32, DisassembledFunc>::new();
-
-            // create emtpy ones for all funcs
-            for f in &ranges {
-                disassembled_funcs
-                    .entry(f.phys_start)
-                    .or_insert(DisassembledFunc {
-                        addr: f.phys_start,
-                        text: "".to_string(),
-                        data: f.is_data,
-                    });
+            if let Some(func) = disassembled_funcs.get_mut(&(start_address_extended as u32)) {
+                func.text
+                    .push_str(&format!("/* 0x{:08X} */ .word 0x{:04X}\n", i, instr));
             }
+        }
 
-            let mut monolithic = String::new();
-
-            let mut skip_next = false;
-
-            for mut i in (0..len).step_by(2) {
-                if (skip_next) {
-                    skip_next = false;
-                    continue;
-                }
-
-                let ii = i as usize;
-                let instr: u32 = ((file_contents[ii] as u32) << 8) | file_contents[ii + 1] as u32;
-
-                let (is_in_func, start_address) = infunc(i as u32, &ranges);
-
-                let (is_in_func_extended, start_address_extended) =
-                    infunc_extended(i as u32, &ranges);
-
-                if !is_in_func && is_in_func_extended {
-                    // data after function, emit for individual files
-                    monolithic.push_str(&format!("/* 0x{:08X} */ .word 0x{:04X}\n", i, instr));
-
-                    if let Some(func) = disassembled_funcs.get_mut(&(start_address_extended as u32))
-                    {
-                        func.text
-                            .push_str(&format!("/* 0x{:08X} */ .word 0x{:04X}\n", i, instr));
-                    }
-                }
-
-                if !is_in_func {
-                    monolithic.push_str(&format!("/* 0x{:08X} */ .word 0x{:04X}\n", i, instr));
-                    continue;
-                } else {
-                    // if this is the first instruction emit the function label
-                    if i as u32 == start_address {
-                        if let Some(func) = disassembled_funcs.get_mut(&(start_address as u32)) {
-                            func.text.push_str(&format!("glabel func_{:08X}\n", i));
-                        }
-                    }
-                }
-
+        if !is_in_func {
+            monolithic.push_str(&format!("/* 0x{:08X} */ .word 0x{:04X}\n", i, instr));
+            continue;
+        } else {
+            // if this is the first instruction emit the function label
+            if i as u32 == start_address {
                 if let Some(func) = disassembled_funcs.get_mut(&(start_address as u32)) {
-                    if (func.data) {
+                    func.text.push_str(&format!("glabel func_{:08X}\n", i));
+                }
+            }
+        }
+
+        if let Some(func) = disassembled_funcs.get_mut(&(start_address as u32)) {
+            if func.data {
+                func.text
+                    .push_str(&format!("/* 0x{:08X} */ .word 0x{:04X}\n", i, instr));
+                continue;
+            }
+        }
+
+        if branch_labels.contains_key(&i.try_into().unwrap()) {
+            if let Some(value) = branch_labels.get(&i.try_into().unwrap()) {
+                // Use the label
+                if let Some(func) = disassembled_funcs.get_mut(&(start_address as u32)) {
+                    func.text.push_str(&format!("{}:\n", value));
+                    monolithic.push_str(&format!("{}:\n", value));
+                }
+            }
+        }
+
+        if data_labels.contains_key(&i.try_into().unwrap()) {
+            if let Some(value) = data_labels.get(&i.try_into().unwrap()) {
+                // Use the label
+                if let Some(func) = disassembled_funcs.get_mut(&(start_address as u32)) {
+                    func.text.push_str(&format!("{}:\n", value.label));
+                    monolithic.push_str(&format!("{}:\n", value.label));
+                }
+                if value.size == 2 {
+                    if let Some(func) = disassembled_funcs.get_mut(&(start_address as u32)) {
+                        func.text.push_str(&format!(".word 0x{:04X}\n", instr));
+                        monolithic.push_str(&format!(".word 0x{:04X}\n", instr));
+                    }
+                } else if value.size == 4 {
+                    let data = ((file_contents[i + 0] as u32) << 24)
+                        | ((file_contents[i + 1] as u32) << 16)
+                        | ((file_contents[i + 2] as u32) << 8)
+                        | ((file_contents[i + 3] as u32) << 0);
+                    if let Some(func) = disassembled_funcs.get_mut(&(start_address as u32)) {
                         func.text
-                            .push_str(&format!("/* 0x{:08X} */ .word 0x{:04X}\n", i, instr));
-                        continue;
+                            .push_str(&format!("/* {:08X} */ .long 0x{:08X}\n", i, data));
+                        monolithic.push_str(&format!("/* {:08X} */ .long 0x{:08X}\n", i, data));
+                    }
+
+                    // skip next instructino since we used it
+
+                    skip_next = true;
+                }
+                continue;
+            }
+        }
+        let mut string = String::new();
+        sh2_disasm(
+            i as u32,
+            instr,
+            true,
+            &mut string,
+            &mut data_labels,
+            &mut branch_labels,
+        );
+        if let Some(func) = disassembled_funcs.get_mut(&(start_address as u32)) {
+            func.text
+                .push_str(&format!("/* 0x{:08X} */ {}\n", i, string));
+            monolithic.push_str(&format!("/* 0x{:08X} */ {}\n", i, string));
+        }
+    }
+
+    return (functions, disassembled_funcs);
+}
+
+#[derive(Default)]
+struct ProcessedSection {
+    is_code: bool,
+    functions: Vec<FunctionPair>,
+    disassembled_funcs: HashMap<u32, DisassembledFunc>,
+    data: String,
+    addr: u64,
+}
+
+fn handle_segments(file_contents: &Vec<u8>, config: &Config) {
+    let mut processed_sections = Vec::<ProcessedSection>::new();
+    if let Some(segments) = &config.segments {
+        for segment in segments {
+            println!("Segment Name: {}", segment.name);
+            println!("Segment Type: {}", segment.segment_type);
+            println!("Segment Start: {}", segment.start);
+
+            if let Some(subsegments) = &segment.subsegments {
+                for subsegment in subsegments {
+                    let subsegment_start = subsegment.start;
+                    let subsegment_type = subsegment
+                        .segment_type
+                        .as_ref()
+                        .unwrap_or(&"Unknown".to_string())
+                        .clone();
+                    let subsegment_file = subsegment
+                        .file
+                        .as_ref()
+                        .unwrap_or(&"Unknown".to_string())
+                        .clone();
+
+                    let subsegment_end = subsegment.end;
+
+                    println!(
+                        "subsegment {:08X}-{:08X} {} {}",
+                        subsegment_start, subsegment_end, subsegment_type, subsegment_file,
+                    );
+
+                    if subsegment_type == "data" {
+                        // just emit words
+                        let mut data_str = String::new();
+                        for i in (subsegment_start..subsegment_end).step_by(2) {
+                            let ii = i as usize;
+                            let data: u32 =
+                                ((file_contents[ii] as u32) << 8) | file_contents[ii + 1] as u32;
+                            data_str.push_str(&format!("/* 0x{:08X} */ .word 0x{:04X}\n", i, data));
+                        }
+
+                        let processed_section = ProcessedSection {
+                            is_code: false,
+                            functions: Vec::<FunctionPair>::new(),
+                            disassembled_funcs: HashMap::<u32, DisassembledFunc>::new(),
+                            data: data_str,
+                            addr: subsegment_start,
+                        };
+                        processed_sections.push(processed_section);
+                    } else {
+                        // find functions and process
+                        let (functions, disassembled_funcs) =
+                            handle_code_section(file_contents, config, subsegment_end);
+
+                        let processed_section = ProcessedSection {
+                            is_code: true,
+                            functions: functions,
+                            disassembled_funcs: disassembled_funcs,
+                            data: "".to_string(),
+                            addr: subsegment_start,
+                        };
+                        processed_sections.push(processed_section);
                     }
                 }
+            }
+        }
+    }
 
-                if branch_labels.contains_key(&i.try_into().unwrap()) {
-                    if let Some(value) = branch_labels.get(&i.try_into().unwrap()) {
-                        // Use the label
-                        if let Some(func) = disassembled_funcs.get_mut(&(start_address as u32)) {
-                            func.text.push_str(&format!("{}:\n", value));
-                            monolithic.push_str(&format!("{}:\n", value));
-                        }
-                    }
-                }
+    // all the segments are processed, emit files
 
-                if data_labels.contains_key(&i.try_into().unwrap()) {
-                    if let Some(value) = data_labels.get(&i.try_into().unwrap()) {
-                        // Use the label
-                        if let Some(func) = disassembled_funcs.get_mut(&(start_address as u32)) {
-                            func.text.push_str(&format!("{}:\n", value.label));
-                            monolithic.push_str(&format!("{}:\n", value.label));
-                        }
-                        if value.size == 2 {
-                            if let Some(func) = disassembled_funcs.get_mut(&(start_address as u32))
-                            {
-                                func.text.push_str(&format!(".word 0x{:04X}\n", instr));
-                                monolithic.push_str(&format!(".word 0x{:04X}\n", instr));
-                            }
-                        } else if value.size == 4 {
-                            let data = ((file_contents[i + 0] as u32) << 24)
-                                | ((file_contents[i + 1] as u32) << 16)
-                                | ((file_contents[i + 2] as u32) << 8)
-                                | ((file_contents[i + 3] as u32) << 0);
-                            if let Some(func) = disassembled_funcs.get_mut(&(start_address as u32))
-                            {
-                                func.text
-                                    .push_str(&format!("/* {:08X} */ .long 0x{:08X}\n", i, data));
-                                monolithic
-                                    .push_str(&format!("/* {:08X} */ .long 0x{:08X}\n", i, data));
-                            }
+    std::fs::create_dir_all(&config.options.asm_path).expect("Failed to create directories.");
 
-                            // skip next instructino since we used it
-
-                            skip_next = true;
-                        }
-                        continue;
-                    }
-                }
-                let mut string = String::new();
-                sh2_disasm(
-                    i as u32,
-                    instr,
-                    true,
-                    &mut string,
-                    &mut data_labels,
-                    &mut branch_labels,
+    // emit all the asm
+    for processed_section in &processed_sections {
+        if !processed_section.is_code {
+            emit_asm_file(
+                format!(
+                    "{}/d_{:05X}.s",
+                    config.options.asm_path, processed_section.addr
+                ),
+                processed_section.data.clone(),
+            );
+        } else {
+            for (addr, df) in &processed_section.disassembled_funcs {
+                emit_asm_file(
+                    format!("{}/f_{:05X}.s", config.options.asm_path, df.addr),
+                    df.text.clone(),
                 );
-                if let Some(func) = disassembled_funcs.get_mut(&(start_address as u32)) {
-                    func.text
-                        .push_str(&format!("/* 0x{:08X} */ {}\n", i, string));
-                    monolithic.push_str(&format!("/* 0x{:08X} */ {}\n", i, string));
-                }
             }
-            emit_c_file(&functions);
-            std::fs::create_dir_all("output/funcs").expect("Failed to create directories.");
-            for (addr, df) in disassembled_funcs {
-                emit_asm_file(format!("output/funcs/f_{:05X}.s", df.addr), df.text);
-            }
+        }
+    }
 
-            let mut file = std::fs::File::create("mono.txt").expect("Failed to create file.");
-            writeln!(&mut file, "{}", monolithic).expect("Failed to write to file.");
+    let filename = format!("{}/output.c", config.options.src_path);
+    let mut file = std::fs::File::create(filename).expect("Failed to create file.");
+    writeln!(&mut file, "#include \"inc_asm.h\"").expect("Failed to write to file.");
+
+    for processed_section in &processed_sections {
+        if !processed_section.is_code {
+            let name = format!("d_{:05X}", processed_section.addr);
+            writeln!(
+                &mut file,
+                "INCLUDE_ASM(\"{}\", {});",
+                "funcs", // TODO fix hardcode
+                name
+            )
+            .expect("Failed to write to file.");
+        } else {
+            for pair in &processed_section.functions {
+                writeln!(&mut file, "INCLUDE_ASM(\"{}\", {});", pair.file, pair.name)
+                    .expect("Failed to write to file.");
+            }
+        }
+    }
+}
+
+fn main() {
+    let config = parse_yaml2();
+
+    match read_file_to_vec(&config.options.target_path) {
+        Ok(file_contents) => {
+            handle_segments(&file_contents, &config);
         }
         Err(error) => {
             // Error reading the file
-            println!("Error: {:?}", error);
+            println!("Error: {:?} {}", error, config.options.target_path);
         }
     }
 }
