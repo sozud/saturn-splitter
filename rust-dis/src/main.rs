@@ -1215,6 +1215,8 @@ fn handle_segments(file_contents: &Vec<u8>, config: &Config) {
         }
     }
 
+    std::fs::create_dir_all(&config.options.src_path).expect("Failed to create src_path directories.");
+
     let filename = format!("{}/output.c", config.options.src_path);
     let mut file = std::fs::File::create(filename).expect("Failed to create file.");
     writeln!(&mut file, "#include \"inc_asm.h\"").expect("Failed to write to file.");
