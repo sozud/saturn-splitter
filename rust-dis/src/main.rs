@@ -862,21 +862,9 @@ fn find_data_labels(v_addr: u32, op: u32, data_labels: &mut HashMap<u32, DataLab
 
 #[derive(Debug, Deserialize)]
 struct Options {
-    platform: String,
-    basename: String,
-    base_path: String,
-    build_path: String,
     target_path: String,
     asm_path: String,
-    asset_path: String,
     src_path: String,
-    compiler: String,
-    symbol_addrs_path: String,
-    undefined_funcs_auto_path: String,
-    undefined_syms_auto_path: String,
-    find_file_boundaries: String,
-    use_legacy_include_asm: String,
-    migrate_rodata_to_functions: String,
 }
 
 #[derive(Debug, Deserialize)]
