@@ -12,12 +12,12 @@ struct DataLabel {
 }
 
 fn match_ni_f(
-    v_addr: u32,
+    _v_addr: u32,
     op: u32,
-    mode: bool,
+    _mode: bool,
     string: &mut String,
-    data_labels: &HashMap<u32, DataLabel>,
-    branch_labels: &HashMap<u32, String>,
+    _data_labels: &HashMap<u32, DataLabel>,
+    _branch_labels: &HashMap<u32, String>,
 ) {
     match op & 0xf000 {
         0x7000 => string.push_str(&format!("add #0x{:02X}, r{}", op & 0xff, (op >> 8) & 0xf)),
@@ -243,7 +243,9 @@ fn match_d_f(
         }
         0x8900 => {
             if (op & 0x80) == 0x80 {
-                let addr = (((op & 0xff) + 0xffffff00).wrapping_mul(2)) + v_addr + 4;
+                let addr = (((op & 0xff) + 0xffffff00).wrapping_mul(2))
+                    .wrapping_add(v_addr)
+                    .wrapping_add(4);
                 // string.push_str(&format!("bt 0x{:08X}", addr));
 
                 if branch_labels.contains_key(&addr) {
@@ -272,7 +274,9 @@ fn match_d_f(
         }
         0x8d00 => {
             if (op & 0x80) == 0x80 {
-                let addr = (((op & 0xff) + 0xffffff00) * 2) + v_addr + 4;
+                let addr = (((op & 0xff) + 0xffffff00).wrapping_mul(2))
+                    .wrapping_add(v_addr)
+                    .wrapping_add(4);
                 // string.push_str(&format!("bt.s 0x{:08X}", addr));
 
                 if branch_labels.contains_key(&addr) {
@@ -848,7 +852,7 @@ fn find_data_labels(v_addr: u32, op: u32, data_labels: &mut HashMap<u32, DataLab
         let target = ((op & 0xff) * 4 + 4 + v_addr) & 0xfffffffc;
 
         // TODO fixme this shouln't be marked as data
-        if (target == 0x14C0) {
+        if target == 0x14C0 {
             println!("problem {:08X}", v_addr);
             return;
         }
@@ -899,9 +903,9 @@ struct Config {
     segments: Option<Vec<Segment>>,
 }
 
-fn parse_yaml2() -> Config {
+fn parse_yaml2(filename: String) -> Config {
     // Read the YAML configuration file
-    let mut file = File::open("config.yaml").expect("Failed to open the file.");
+    let mut file = File::open(filename.clone()).expect(&format!("Failed to open the file {}", filename));
     let mut contents = String::new();
     file.read_to_string(&mut contents)
         .expect("Failed to read the file.");
@@ -1214,7 +1218,7 @@ fn handle_segments(file_contents: &Vec<u8>, config: &Config) {
                 processed_section.data.clone(),
             );
         } else {
-            for (addr, df) in &processed_section.disassembled_funcs {
+            for (_addr, df) in &processed_section.disassembled_funcs {
                 emit_asm_file(
                     format!("{}/f_{:05X}.s", config.options.asm_path, df.addr),
                     df.text.clone(),
@@ -1252,18 +1256,27 @@ fn handle_segments(file_contents: &Vec<u8>, config: &Config) {
     }
 }
 
-fn main() {
-    let config = parse_yaml2();
+use std::env;
 
-    match read_file_to_vec(&config.options.target_path) {
-        Ok(file_contents) => {
-            handle_segments(&file_contents, &config);
-        }
-        Err(error) => {
-            // Error reading the file
-            println!("Error: {:?} {}", error, config.options.target_path);
+fn main() {
+    let args: Vec<String> = env::args().collect();
+
+    if let Some(filename) = args.get(1) {
+        println!("Reading: {}", filename);
+        let config = parse_yaml2(filename.to_string());
+
+        match read_file_to_vec(&config.options.target_path) {
+            Ok(file_contents) => {
+                handle_segments(&file_contents, &config);
+            }
+            Err(error) => {
+                // Error reading the file
+                println!("Error: {:?} {}", error, config.options.target_path);
+            }
         }
     }
+
+
 }
 
 #[cfg(test)]
