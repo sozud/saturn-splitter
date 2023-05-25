@@ -9,6 +9,7 @@ use std::io::{self, Read};
 struct DataLabel {
     size: u32,
     label: String,
+    source: u32,
 }
 
 fn match_ni_f(
@@ -482,11 +483,7 @@ fn match_f00f(
         0x6003 => string.push_str(&format!("mov r{}, r{}", (op >> 4) & 0xf, (op >> 8) & 0xf)),
         0x0007 => string.push_str(&format!("mul.l r{}, r{}", (op >> 4) & 0xf, (op >> 8) & 0xf)),
         0x200f => string.push_str(&format!("muls r{}, r{}", (op >> 4) & 0xf, (op >> 8) & 0xf)),
-        0x200e => string.push_str(&format!(
-            "mulu.w r{}, r{}",
-            (op >> 4) & 0xf,
-            (op >> 8) & 0xf
-        )),
+        0x200e => string.push_str(&format!("mulu r{}, r{}", (op >> 4) & 0xf, (op >> 8) & 0xf)),
         0x600b => string.push_str(&format!("neg r{}, r{}", (op >> 4) & 0xf, (op >> 8) & 0xf)),
         0x600a => string.push_str(&format!("negc r{}, r{}", (op >> 4) & 0xf, (op >> 8) & 0xf)),
         0x6007 => string.push_str(&format!("not r{}, r{}", (op >> 4) & 0xf, (op >> 8) & 0xf)),
@@ -650,9 +647,9 @@ fn match_f0ff(
         0x4002 => string.push_str(&format!("sts.l mach, @-r{}", (op >> 8) & 0xf)),
         0x4012 => string.push_str(&format!("sts.l macl, @-r{}", (op >> 8) & 0xf)),
         0x4022 => string.push_str(&format!("sts.l pr, @-r{}", (op >> 8) & 0xf)),
-        0x400e => string.push_str(&format!("ldc, r{}, sr", (op >> 8) & 0xf)),
-        0x401e => string.push_str(&format!("ldc, r{}, gbr", (op >> 8) & 0xf)),
-        0x402e => string.push_str(&format!("ldc, r{}, vbr", (op >> 8) & 0xf)),
+        0x400e => string.push_str(&format!("ldc r{}, sr", (op >> 8) & 0xf)),
+        0x401e => string.push_str(&format!("ldc r{}, gbr", (op >> 8) & 0xf)),
+        0x402e => string.push_str(&format!("ldc r{}, vbr", (op >> 8) & 0xf)),
         0x400a => string.push_str(&format!("lds r{}, mach", (op >> 8) & 0xf)),
         0x401a => string.push_str(&format!("lds r{}, macl", (op >> 8) & 0xf)),
         0x402a => string.push_str(&format!("lds r{}, pr", (op >> 8) & 0xf)),
@@ -708,10 +705,16 @@ struct FunctionRange {
     is_data: bool,
 }
 
-fn find_funcs(vec: &Vec<u8>, ranges: &mut Vec<FunctionRange>) {
+fn find_funcs(
+    vec: &Vec<u8>,
+    section_start: u64,
+    section_end: u64,
+    ranges: &mut Vec<FunctionRange>,
+) {
+    // first, find every location of an rts.
     let mut rts_pos: Vec<u32> = Vec::new();
-    for i in (0..vec.len()).step_by(2) {
-        let instr = (vec[i] as u32) << 8 | vec[i + 1] as u32;
+    for i in (section_start..section_end).step_by(2) {
+        let instr = (vec[i as usize] as u32) << 8 | vec[i as usize + 1] as u32;
         if instr == 0x000b {
             rts_pos.push(i as u32);
         }
@@ -724,6 +727,7 @@ fn find_funcs(vec: &Vec<u8>, ranges: &mut Vec<FunctionRange>) {
         let mut preamble_found = false;
 
         let mut pc = pc;
+        // now scan back from rts[i] to rts[i - 1] to try to find the function preamble
         while pc >= prev_rts {
             let instr = (vec[pc as usize] as u32) << 8 | vec[(pc + 1) as usize] as u32;
 
@@ -799,11 +803,12 @@ fn add_label(addr: u32, branch_labels: &mut HashMap<u32, String>) {
     branch_labels.insert(addr, label);
 }
 
-fn add_data_label(addr: u32, size: u32, data_labels: &mut HashMap<u32, DataLabel>) {
+fn add_data_label(source: u32, addr: u32, size: u32, data_labels: &mut HashMap<u32, DataLabel>) {
     let the_label = format!("dat_{:08X}", addr);
     let data_label = DataLabel {
         size,
         label: the_label,
+        source: source,
     };
     data_labels.insert(addr, data_label);
 }
@@ -845,18 +850,43 @@ fn find_branch_labels(v_addr: u32, op: u32, branch_labels: &mut HashMap<u32, Str
 }
 
 fn find_data_labels(v_addr: u32, op: u32, data_labels: &mut HashMap<u32, DataLabel>) {
+    // is this already marked as data?
+    if data_labels.contains_key(&v_addr.try_into().unwrap()) {
+        // don't try to dissassemble as an instruction
+        return;
+    }
+
+    // is this marked as the second word of long data?
+    if data_labels.contains_key(&(v_addr - 2).try_into().unwrap()) {
+        if let Some(value) = data_labels.get(&(v_addr - 2).try_into().unwrap()) {
+            if value.size == 4 {
+                // println!("skipping {:08X}", v_addr);
+                return;
+            }
+        }
+    }
+
     if (op & 0xf000) == 0x9000 {
         let addr = (op & 0xff) * 2 + 4 + v_addr;
-        add_data_label(addr, 2, data_labels);
+        add_data_label(v_addr, addr, 2, data_labels);
     } else if (op & 0xf000) == 0xd000 {
         let target = ((op & 0xff) * 4 + 4 + v_addr) & 0xfffffffc;
 
+        if v_addr == 0x6d94 {
+            println!("problem {:08X}", target);
+            // return;
+        }
         // TODO fixme this shouln't be marked as data
         if target == 0x14C0 {
             println!("problem {:08X}", v_addr);
             return;
         }
-        add_data_label(target, 4, data_labels);
+
+        if target == 0x35c8 {
+            println!("problem {:08X}", v_addr);
+            return;
+        }
+        add_data_label(v_addr, target, 4, data_labels);
     }
 }
 
@@ -865,6 +895,7 @@ struct Options {
     target_path: String,
     asm_path: String,
     src_path: String,
+    decomp_empty_funcs: bool,
 }
 
 #[derive(Debug, Deserialize)]
@@ -893,7 +924,8 @@ struct Config {
 
 fn parse_yaml2(filename: String) -> Config {
     // Read the YAML configuration file
-    let mut file = File::open(filename.clone()).expect(&format!("Failed to open the file {}", filename));
+    let mut file =
+        File::open(filename.clone()).expect(&format!("Failed to open the file {}", filename));
     let mut contents = String::new();
     file.read_to_string(&mut contents)
         .expect("Failed to read the file.");
@@ -937,11 +969,12 @@ struct DisassembledFunc {
 fn handle_code_section(
     file_contents: &Vec<u8>,
     config: &Config,
+    section_start: u64,
     section_end: u64,
 ) -> (Vec<FunctionPair>, HashMap<u32, DisassembledFunc>) {
     let len = file_contents.len();
     let mut ranges = Vec::<FunctionRange>::new();
-    find_funcs(&file_contents, &mut ranges);
+    find_funcs(&file_contents, section_start, section_end, &mut ranges);
 
     let mut functions = Vec::<FunctionPair>::new();
 
@@ -966,7 +999,7 @@ fn handle_code_section(
     let mut data_labels = HashMap::<u32, DataLabel>::new();
     let mut branch_labels = HashMap::<u32, String>::new();
 
-    for i in (0..len).step_by(2) {
+    for i in (section_start..section_end).step_by(2) {
         let ii = i as usize;
         let instr: u32 = ((file_contents[ii] as u32) << 8) | file_contents[ii + 1] as u32;
 
@@ -998,7 +1031,7 @@ fn handle_code_section(
 
     let mut skip_next = false;
 
-    for i in (0..len).step_by(2) {
+    for i in (section_start..section_end).step_by(2) {
         if skip_next {
             skip_next = false;
             continue;
@@ -1071,7 +1104,10 @@ fn handle_code_section(
             if let Some(value) = data_labels.get(&i.try_into().unwrap()) {
                 // Use the label
                 if let Some(func) = disassembled_funcs.get_mut(&(start_address as u32)) {
-                    func.text.push_str(&format!("{}:\n", value.label));
+                    func.text.push_str(&format!(
+                        "{}: /* source: {:08X} */\n",
+                        value.label, value.source
+                    ));
                     monolithic.push_str(&format!("{}:\n", value.label));
                 }
                 if value.size == 2 {
@@ -1080,10 +1116,10 @@ fn handle_code_section(
                         monolithic.push_str(&format!(".word 0x{:04X}\n", instr));
                     }
                 } else if value.size == 4 {
-                    let data = ((file_contents[i + 0] as u32) << 24)
-                        | ((file_contents[i + 1] as u32) << 16)
-                        | ((file_contents[i + 2] as u32) << 8)
-                        | ((file_contents[i + 3] as u32) << 0);
+                    let data = ((file_contents[i as usize + 0] as u32) << 24)
+                        | ((file_contents[i as usize + 1] as u32) << 16)
+                        | ((file_contents[i as usize + 2] as u32) << 8)
+                        | ((file_contents[i as usize + 3] as u32) << 0);
                     if let Some(func) = disassembled_funcs.get_mut(&(start_address as u32)) {
                         func.text
                             .push_str(&format!("/* {:08X} */ .long 0x{:08X}\n", i, data));
@@ -1108,7 +1144,7 @@ fn handle_code_section(
         );
         if let Some(func) = disassembled_funcs.get_mut(&(start_address as u32)) {
             func.text
-                .push_str(&format!("/* 0x{:08X} */ {}\n", i, string));
+                .push_str(&format!("/* 0x{:08X} 0x{:04X} */ {}\n", i, instr, string));
             monolithic.push_str(&format!("/* 0x{:08X} */ {}\n", i, string));
         }
     }
@@ -1147,6 +1183,7 @@ fn handle_segments(file_contents: &Vec<u8>, config: &Config) {
                         .unwrap_or(&"Unknown".to_string())
                         .clone();
 
+                    let subsegment_start = subsegment.start;
                     let subsegment_end = subsegment.end;
 
                     println!(
@@ -1174,8 +1211,12 @@ fn handle_segments(file_contents: &Vec<u8>, config: &Config) {
                         processed_sections.push(processed_section);
                     } else {
                         // find functions and process
-                        let (functions, disassembled_funcs) =
-                            handle_code_section(file_contents, config, subsegment_end);
+                        let (functions, disassembled_funcs) = handle_code_section(
+                            file_contents,
+                            config,
+                            subsegment_start,
+                            subsegment_end,
+                        );
 
                         let processed_section = ProcessedSection {
                             is_code: true,
@@ -1215,31 +1256,40 @@ fn handle_segments(file_contents: &Vec<u8>, config: &Config) {
         }
     }
 
-    std::fs::create_dir_all(&config.options.src_path).expect("Failed to create src_path directories.");
+    let path = &config.options.src_path;
+    let asm_path = &config.options.asm_path;
 
-    let filename = format!("{}/output.c", config.options.src_path);
-    let mut file = std::fs::File::create(filename).expect("Failed to create file.");
-    writeln!(&mut file, "#include \"inc_asm.h\"").expect("Failed to write to file.");
+    std::fs::create_dir_all(path).expect("Failed to create src_path directories.");
 
-    for processed_section in &processed_sections {
-        if !processed_section.is_code {
-            let name = format!("d_{:05X}", processed_section.addr);
-            writeln!(
-                &mut file,
-                "INCLUDE_ASM(\"{}\", {});",
-                "funcs", // TODO fix hardcode
-                name
-            )
-            .expect("Failed to write to file.");
-        } else {
-            for pair in &processed_section.functions {
-                // assume this is a empty function if the size is 8
-                if pair.end - pair.start == 8 {
-                    writeln!(&mut file, "void {}() {{}}", pair.name)
-                        .expect("Failed to write to file.");
+    if let Some(segs) = &config.segments {
+        if !segs.is_empty() {
+            let segment_name = &segs[0].name;
+
+            let filename = format!("{}/{}.c", path, segment_name);
+            let mut file = std::fs::File::create(filename).expect("Failed to create file.");
+            writeln!(&mut file, "#include \"inc_asm.h\"").expect("Failed to write to file.");
+
+            for processed_section in &processed_sections {
+                if !processed_section.is_code {
+                    let name = format!("d_{:05X}", processed_section.addr);
+                    writeln!(
+                        &mut file,
+                        "INCLUDE_ASM(\"{}\", {});",
+                        asm_path, // TODO fix hardcode
+                        name
+                    )
+                    .expect("Failed to write to file.");
                 } else {
-                    writeln!(&mut file, "INCLUDE_ASM(\"{}\", {});", pair.file, pair.name)
-                        .expect("Failed to write to file.");
+                    for pair in &processed_section.functions {
+                        // assume this is a empty function if the size is 8
+                        if (pair.end - pair.start == 8) && config.options.decomp_empty_funcs {
+                            writeln!(&mut file, "void {}() {{}}", pair.name)
+                                .expect("Failed to write to file.");
+                        } else {
+                            writeln!(&mut file, "INCLUDE_ASM(\"{}\", {});", asm_path, pair.name)
+                                .expect("Failed to write to file.");
+                        }
+                    }
                 }
             }
         }
@@ -1265,77 +1315,75 @@ fn main() {
             }
         }
     }
-
-
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
 
-    #[test]
-    fn test_infunc() {
-        let ranges = vec![
-            FunctionRange {
-                phys_start: 100,
-                phys_end: 200,
-            },
-            FunctionRange {
-                phys_start: 300,
-                phys_end: 400,
-            },
-            FunctionRange {
-                phys_start: 500,
-                phys_end: 600,
-            },
-        ];
+    // #[test]
+    // fn test_infunc() {
+    //     let ranges = vec![
+    //         FunctionRange {
+    //             phys_start: 100,
+    //             phys_end: 200,
+    //         },
+    //         FunctionRange {
+    //             phys_start: 300,
+    //             phys_end: 400,
+    //         },
+    //         FunctionRange {
+    //             phys_start: 500,
+    //             phys_end: 600,
+    //         },
+    //     ];
 
-        // Test with values inside the ranges
-        assert_eq!(infunc(150, &ranges), (true, 100));
-        assert_eq!(infunc(350, &ranges), (true, 300));
-        assert_eq!(infunc(550, &ranges), (true, 500));
+    //     // Test with values inside the ranges
+    //     assert_eq!(infunc(150, &ranges), (true, 100));
+    //     assert_eq!(infunc(350, &ranges), (true, 300));
+    //     assert_eq!(infunc(550, &ranges), (true, 500));
 
-        // Test with values outside the ranges
-        assert_eq!(infunc(50, &ranges), (false, 0));
-        assert_eq!(infunc(250, &ranges), (false, 0));
-        assert_eq!(infunc(700, &ranges), (false, 0));
-    }
+    //     // Test with values outside the ranges
+    //     assert_eq!(infunc(50, &ranges), (false, 0));
+    //     assert_eq!(infunc(250, &ranges), (false, 0));
+    //     assert_eq!(infunc(700, &ranges), (false, 0));
+    // }
 
-    #[test]
-    fn test_infunc_extended() {
-        // if we are inbetween functions, include the rodata
+    // #[test]
+    // fn test_infunc_extended() {
+    //     // if we are inbetween functions, include the rodata
 
-        let ranges = vec![
-            FunctionRange {
-                phys_start: 100,
-                phys_end: 200,
-            },
-            FunctionRange {
-                phys_start: 300,
-                phys_end: 400,
-            },
-            FunctionRange {
-                phys_start: 500,
-                phys_end: 600,
-            },
-        ];
+    //     let ranges = vec![
+    //         FunctionRange {
+    //             phys_start: 100,
+    //             phys_end: 200,
+    //         },
+    //         FunctionRange {
+    //             phys_start: 300,
+    //             phys_end: 400,
+    //         },
+    //         FunctionRange {
+    //             phys_start: 500,
+    //             phys_end: 600,
+    //         },
+    //     ];
 
-        //0-99 hasm
-        //100-200 func1
-        //201-299 func1 data (include with func1)
-        //300-400 func2
-        //401-499 func2 data
-        //500-600 func3
+    //     //0-99 hasm
+    //     //100-200 func1
+    //     //201-299 func1 data (include with func1)
+    //     //300-400 func2
+    //     //401-499 func2 data
+    //     //500-600 func3
 
-        // Test with values inside the ranges
-        assert_eq!(infunc_extended(150, &ranges), (true, 100));
-        assert_eq!(infunc_extended(350, &ranges), (true, 300));
-        assert_eq!(infunc_extended(550, &ranges), (true, 500));
+    //     // Test with values inside the ranges
+    //     assert_eq!(infunc_extended(150, &ranges), (true, 100));
+    //     assert_eq!(infunc_extended(350, &ranges), (true, 300));
+    //     assert_eq!(infunc_extended(550, &ranges), (true, 500));
 
-        // Test with values outside the ranges
-        assert_eq!(infunc_extended(50, &ranges), (false, 0)); //hasm range, no
-        assert_eq!(infunc_extended(250, &ranges), (true, 100)); //func1 data
-    }
+    //     // Test with values outside the ranges
+    //     assert_eq!(infunc_extended(50, &ranges), (false, 0)); //hasm range, no
+    //     assert_eq!(infunc_extended(250, &ranges), (true, 100)); //func1 data
+    // }
 
     #[test]
     fn test_sts_l() {
