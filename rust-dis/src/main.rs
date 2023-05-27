@@ -12,6 +12,17 @@ struct DataLabel {
     source: u32,
 }
 
+fn fetch_instruction(
+    file_contents: &Vec<u8>,
+    virtual_address: u64,
+    virtual_address_base: u64,
+) -> u32 {
+    let physical_address = virtual_address - virtual_address_base;
+    let instr: u32 = ((file_contents[physical_address as usize] as u32) << 8)
+        | file_contents[physical_address as usize + 1] as u32;
+    return instr;
+}
+
 fn match_ni_f(
     _v_addr: u32,
     op: u32,
@@ -728,7 +739,7 @@ fn find_funcs(
 
         let mut pc = pc;
         // now scan back from rts[i] to rts[i - 1] to try to find the function preamble
-        while pc >= prev_rts {
+        while pc >= prev_rts && pc > 0 {
             let instr = (vec[pc as usize] as u32) << 8 | vec[(pc + 1) as usize] as u32;
 
             if !preamble_found {
@@ -937,6 +948,7 @@ fn parse_yaml2(filename: String) -> Config {
 }
 use std::io::Write;
 
+#[derive(Debug)]
 struct FunctionPair {
     file: String,
     name: String,
@@ -959,6 +971,7 @@ fn emit_asm_file(filename: String, data: String) {
     writeln!(&mut file, "{}", data).expect("Failed to write to file.");
 }
 
+#[derive(Debug)]
 struct DisassembledFunc {
     addr: u32,
     end: u32,
@@ -968,7 +981,6 @@ struct DisassembledFunc {
 
 fn handle_code_section(
     file_contents: &Vec<u8>,
-    config: &Config,
     section_start: u64,
     section_end: u64,
 ) -> (Vec<FunctionPair>, HashMap<u32, DisassembledFunc>) {
@@ -994,6 +1006,10 @@ fn handle_code_section(
             end: r.phys_end,
         };
         functions.push(pair);
+    }
+
+    if ranges.len() == 0 {
+        println!("no ranges");
     }
 
     let mut data_labels = HashMap::<u32, DataLabel>::new();
@@ -1211,12 +1227,8 @@ fn handle_segments(file_contents: &Vec<u8>, config: &Config) {
                         processed_sections.push(processed_section);
                     } else {
                         // find functions and process
-                        let (functions, disassembled_funcs) = handle_code_section(
-                            file_contents,
-                            config,
-                            subsegment_start,
-                            subsegment_end,
-                        );
+                        let (functions, disassembled_funcs) =
+                            handle_code_section(file_contents, subsegment_start, subsegment_end);
 
                         let processed_section = ProcessedSection {
                             is_code: true,
@@ -1317,9 +1329,118 @@ fn main() {
     }
 }
 
+use std::fs;
+use std::process::Command;
+use std::path::PathBuf;
+use tempfile::NamedTempFile;
+
+fn assemble(input: &str) -> Result<Vec<u8>, Box<dyn std::error::Error>> {
+    // Create a temporary file and write the assembly code to it
+    let mut asm_file = NamedTempFile::new()?;
+    asm_file.write_all(input.as_bytes())?;
+
+    // Create a temporary file for the output
+    let output_file = NamedTempFile::new()?;
+   
+    let cmd_str = format!(
+        "sh-elf-as -o /work/{} /work/{} && sh-elf-objcopy -O binary /work/{} /work/{}",
+        output_file.path().file_name().unwrap().to_string_lossy(),
+        asm_file.path().file_name().unwrap().to_string_lossy(),
+        output_file.path().file_name().unwrap().to_string_lossy(),
+        output_file.path().file_name().unwrap().to_string_lossy(),
+    );
+
+    let output = Command::new("docker")
+        .args(&[
+            "run",
+            "-v",
+            &format!(
+                "{}:/work",
+                output_file.path().parent().unwrap().to_string_lossy()
+            ),
+            "binutils-sh-elf",
+            "/bin/sh",
+            "-c",
+            &cmd_str,
+        ])
+        .output()?;
+
+    // Print stdout
+    if !output.stdout.is_empty() {
+        println!("{}", String::from_utf8_lossy(&output.stdout));
+    }
+
+    // Print stderr
+    if !output.stderr.is_empty() {
+        eprintln!("{}", String::from_utf8_lossy(&output.stderr));
+    }
+
+    // Read the output file into a byte vector
+    let binary = std::fs::read(output_file.path())?;
+
+    Ok(binary)
+}
+
+fn asm_test_case(asm: String, expected: String) {
+    let output = assemble(&asm).unwrap();
+
+    println!("output: {:?} ", output);
+
+    let mut data_labels = HashMap::<u32, DataLabel>::new();
+    let mut branch_labels = HashMap::<u32, String>::new();
+
+    let mut output_string = String::new();
+
+    let (functions, disassembled_funcs) =
+        handle_code_section(&output, 0, output.len().try_into().unwrap());
+
+    println!("functions {:?}", functions);
+    println!("disassembled_funcs {:?}", disassembled_funcs);
+
+    let trimmed_right: String = expected
+        .lines()
+        .map(|line| line.trim())
+        .collect::<Vec<_>>()
+        .join("\n");
+
+    assert_eq!(disassembled_funcs[&8].text, trimmed_right);
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn do_asm() {
+        let asm = r#"
+        mov.l r8, @-r15
+        mov r0, r1
+        rts
+        nop
+    
+        mov.l r8, @-r15
+        mov r0, r1
+        bra label
+        nop
+        label:
+        mov r1, r0
+        rts
+        nop
+        "#;
+
+        let expected = r#"glabel func_00000008
+        /* 0x00000008 0x2F86 */ mov.l r8, @-r15
+        /* 0x0000000A 0x6103 */ mov r0, r1
+        /* 0x0000000C 0xA000 */ bra lab_00000010
+        /* 0x0000000E 0x0009 */ nop
+        lab_00000010:
+        /* 0x00000010 0x6013 */ mov r1, r0
+        /* 0x00000012 0x000B */ rts
+        /* 0x00000014 0x0009 */ nop
+        "#;
+
+        asm_test_case(asm.to_string(), expected.to_string());
+    }
 
     // #[test]
     // fn test_infunc() {
