@@ -1330,8 +1330,8 @@ fn main() {
 }
 
 use std::fs;
-use std::process::Command;
 use std::path::PathBuf;
+use std::process::Command;
 use tempfile::NamedTempFile;
 
 fn assemble(input: &str) -> Result<Vec<u8>, Box<dyn std::error::Error>> {
@@ -1341,7 +1341,7 @@ fn assemble(input: &str) -> Result<Vec<u8>, Box<dyn std::error::Error>> {
 
     // Create a temporary file for the output
     let output_file = NamedTempFile::new()?;
-   
+
     let cmd_str = format!(
         "sh-elf-as -o /work/{} /work/{} && sh-elf-objcopy -O binary /work/{} /work/{}",
         output_file.path().file_name().unwrap().to_string_lossy(),
@@ -1409,6 +1409,48 @@ fn asm_test_case(asm: String, expected: String) {
 #[cfg(test)]
 mod tests {
     use super::*;
+ 
+    // mov.l      @(dtest-.,pc),r0
+    // is apparently the new version of @(dtest,pc), r0
+    // see https://github.com/bminor/binutils-gdb/commit/9691d64f9a558a599867a6528db1908e4c5bc63f
+    #[test]
+    fn check_mov_l_pc() {
+        let asm = r#"
+        mov.l r8, @-r15
+        mov r0, r1
+        rts
+        nop
+    
+        mov.l r8, @-r15
+        mov.l      @(dtest-.,pc),r0
+        mov.w      @(wtest-.,pc),r1
+        rts
+        nop
+        .align 2
+        dtest:
+        .long 0xdeadbeef
+        .align 2
+        wtest:
+        .word 0xface
+        "#;
+
+        // TODO mov.w/mov.l should emit a label in addition to labeling as
+        // data
+        let expected = r#"glabel func_00000008
+        /* 0x00000008 0x2F86 */ mov.l r8, @-r15
+        /* 0x0000000A 0xD002 */ mov.l @(0x00A, pc), r0
+        /* 0x0000000C 0x9104 */ mov.w @(0x00C, pc), r1
+        /* 0x0000000E 0x000B */ rts
+        /* 0x00000010 0x0009 */ nop
+        /* 0x00000012 */ .word 0x0009
+        /* 0x00000014 */ .word 0xDEAD
+        /* 0x00000016 */ .word 0xBEEF
+        /* 0x00000018 */ .word 0xFACE
+        /* 0x0000001A */ .word 0x0009
+        "#;
+
+        asm_test_case(asm.to_string(), expected.to_string());
+    }
 
     #[test]
     fn do_asm() {
