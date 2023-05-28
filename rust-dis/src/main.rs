@@ -2,10 +2,10 @@
 
 use serde_derive::Deserialize;
 use serde_yaml;
+use std::collections::BTreeMap;
 use std::collections::HashMap;
 use std::fs::File;
 use std::io::{self, Read};
-
 struct DataLabel {
     size: u32,
     label: String,
@@ -198,7 +198,6 @@ fn match_d_f(
                 let addr = (((op & 0xff) + 0xffffff00).wrapping_mul(2))
                     .wrapping_add(v_addr)
                     .wrapping_add(4);
-                // string.push_str(&format!("bf 0x{:08X}", addr));
 
                 if branch_labels.contains_key(&addr) {
                     if let Some(value) = branch_labels.get(&addr) {
@@ -211,7 +210,6 @@ fn match_d_f(
                 }
             } else {
                 let addr = ((op & 0xff) * 2) + v_addr + 4;
-                // string.push_str(&format!("bf 0x{:08X}", addr));
 
                 if branch_labels.contains_key(&addr) {
                     if let Some(value) = branch_labels.get(&addr) {
@@ -229,7 +227,6 @@ fn match_d_f(
                 let addr = (((op & 0xff) + 0xffffff00).wrapping_mul(2))
                     .wrapping_add(v_addr)
                     .wrapping_add(4);
-                // string.push_str(&format!("bf.s 0x{:08X}", addr));
                 if branch_labels.contains_key(&addr) {
                     if let Some(value) = branch_labels.get(&addr) {
                         // Use the label
@@ -241,7 +238,6 @@ fn match_d_f(
                 }
             } else {
                 let addr = ((op & 0xff) * 2) + v_addr + 4;
-                // string.push_str(&format!("bf.s 0x{:08X}", addr));
                 if branch_labels.contains_key(&addr) {
                     if let Some(value) = branch_labels.get(&addr) {
                         // Use the label
@@ -258,7 +254,6 @@ fn match_d_f(
                 let addr = (((op & 0xff) + 0xffffff00).wrapping_mul(2))
                     .wrapping_add(v_addr)
                     .wrapping_add(4);
-                // string.push_str(&format!("bt 0x{:08X}", addr));
 
                 if branch_labels.contains_key(&addr) {
                     if let Some(value) = branch_labels.get(&addr) {
@@ -302,7 +297,6 @@ fn match_d_f(
                 }
             } else {
                 let addr = ((op & 0xff) * 2) + v_addr + 4;
-                // string.push_str(&format!("bt.s 0x{:08X}", addr));
 
                 if branch_labels.contains_key(&addr) {
                     if let Some(value) = branch_labels.get(&addr) {
@@ -925,6 +919,7 @@ struct Segment {
     segment_type: String,
     start: u64,
     subsegments: Option<Vec<Subsegment>>,
+    vram: u64,
 }
 
 #[derive(Debug, Deserialize)]
@@ -948,21 +943,17 @@ fn parse_yaml2(filename: String) -> Config {
 }
 use std::io::Write;
 
-#[derive(Debug)]
-struct FunctionPair {
-    file: String,
-    name: String,
-    start: u32,
-    end: u32,
-}
-
-fn emit_c_file(functions: &Vec<FunctionPair>, output_path: String) {
+fn emit_c_file(functions: &BTreeMap<u32, DisassembledFunc>, output_path: String) {
     let filename = format!("{}/output.c", output_path);
     let mut file = std::fs::File::create(filename).expect("Failed to create file.");
     writeln!(&mut file, "#include \"inc_asm.h\"").expect("Failed to write to file.");
     for pair in functions {
-        writeln!(&mut file, "INCLUDE_ASM(\"{}\", {});", pair.file, pair.name)
-            .expect("Failed to write to file.");
+        writeln!(
+            &mut file,
+            "INCLUDE_ASM(\"{}\", {});",
+            pair.1.file, pair.1.name
+        )
+        .expect("Failed to write to file.");
     }
 }
 
@@ -971,42 +962,26 @@ fn emit_asm_file(filename: String, data: String) {
     writeln!(&mut file, "{}", data).expect("Failed to write to file.");
 }
 
-#[derive(Debug)]
+use std::fmt;
+
 struct DisassembledFunc {
     addr: u32,
     end: u32,
     text: String,
     data: bool,
+    name: String,
+    file: String,
 }
 
 fn handle_code_section(
     file_contents: &Vec<u8>,
     section_start: u64,
     section_end: u64,
-) -> (Vec<FunctionPair>, HashMap<u32, DisassembledFunc>) {
+    virtual_base_addr: u64,
+) -> (BTreeMap<u32, DisassembledFunc>) {
     let len = file_contents.len();
     let mut ranges = Vec::<FunctionRange>::new();
     find_funcs(&file_contents, section_start, section_end, &mut ranges);
-
-    let mut functions = Vec::<FunctionPair>::new();
-
-    for r in &ranges {
-        println!(
-            "{:08X} {:08X} len: {}",
-            r.phys_start,
-            r.phys_end,
-            r.phys_end - r.phys_start
-        );
-        let mut name = String::new();
-        name.push_str(&format!("f_{:05X}", r.phys_start));
-        let pair = FunctionPair {
-            file: "funcs".to_string(),
-            name: name,
-            start: r.phys_start,
-            end: r.phys_end,
-        };
-        functions.push(pair);
-    }
 
     if ranges.len() == 0 {
         println!("no ranges");
@@ -1025,14 +1000,24 @@ fn handle_code_section(
             continue;
         }
 
-        find_branch_labels(i.try_into().unwrap(), instr, &mut branch_labels);
-        find_data_labels(i.try_into().unwrap(), instr, &mut data_labels);
+        find_branch_labels(
+            TryInto::<u32>::try_into(i).unwrap() + virtual_base_addr as u32,
+            instr,
+            &mut branch_labels,
+        );
+        find_data_labels(
+            TryInto::<u32>::try_into(i).unwrap() + virtual_base_addr as u32,
+            instr,
+            &mut data_labels,
+        );
     }
 
-    let mut disassembled_funcs = HashMap::<u32, DisassembledFunc>::new();
+    let mut disassembled_funcs = BTreeMap::<u32, DisassembledFunc>::new();
 
     // create emtpy ones for all funcs
     for f in &ranges {
+        let virtual_addr =
+            TryInto::<u32>::try_into(f.phys_start).unwrap() + virtual_base_addr as u32;
         disassembled_funcs
             .entry(f.phys_start)
             .or_insert(DisassembledFunc {
@@ -1040,6 +1025,8 @@ fn handle_code_section(
                 end: f.phys_end,
                 text: "".to_string(),
                 data: f.is_data,
+                name: format!("f{:07X}", virtual_addr),
+                file: "_".to_string(),
             });
     }
 
@@ -1048,6 +1035,7 @@ fn handle_code_section(
     let mut skip_next = false;
 
     for i in (section_start..section_end).step_by(2) {
+        let virtual_addr = TryInto::<u32>::try_into(i).unwrap() + virtual_base_addr as u32;
         if skip_next {
             skip_next = false;
             continue;
@@ -1066,8 +1054,10 @@ fn handle_code_section(
 
         if beyond_last_func {
             if let Some(func) = disassembled_funcs.get_mut(&(beyond_addr as u32)) {
-                func.text
-                    .push_str(&format!("/* 0x{:08X} */ .word 0x{:04X}\n", i, instr));
+                func.text.push_str(&format!(
+                    "/* 0x{:08X} */ .word 0x{:04X}\n",
+                    virtual_addr, instr
+                ));
             }
 
             if ii as u64 >= section_end - 2 {
@@ -1081,8 +1071,10 @@ fn handle_code_section(
             monolithic.push_str(&format!("/* 0x{:08X} */ .word 0x{:04X}\n", i, instr));
 
             if let Some(func) = disassembled_funcs.get_mut(&(start_address_extended as u32)) {
-                func.text
-                    .push_str(&format!("/* 0x{:08X} */ .word 0x{:04X}\n", i, instr));
+                func.text.push_str(&format!(
+                    "/* 0x{:08X} */ .word 0x{:04X}\n",
+                    virtual_addr, instr
+                ));
             }
         }
 
@@ -1093,21 +1085,24 @@ fn handle_code_section(
             // if this is the first instruction emit the function label
             if i as u32 == start_address {
                 if let Some(func) = disassembled_funcs.get_mut(&(start_address as u32)) {
-                    func.text.push_str(&format!("glabel func_{:08X}\n", i));
+                    func.text
+                        .push_str(&format!("glabel func_{:08X}\n", virtual_addr));
                 }
             }
         }
 
         if let Some(func) = disassembled_funcs.get_mut(&(start_address as u32)) {
             if func.data {
-                func.text
-                    .push_str(&format!("/* 0x{:08X} */ .word 0x{:04X}\n", i, instr));
+                func.text.push_str(&format!(
+                    "/* 0x{:08X} */ .word 0x{:04X}\n",
+                    virtual_addr, instr
+                ));
                 continue;
             }
         }
 
-        if branch_labels.contains_key(&i.try_into().unwrap()) {
-            if let Some(value) = branch_labels.get(&i.try_into().unwrap()) {
+        if branch_labels.contains_key(&virtual_addr.try_into().unwrap()) {
+            if let Some(value) = branch_labels.get(&virtual_addr.try_into().unwrap()) {
                 // Use the label
                 if let Some(func) = disassembled_funcs.get_mut(&(start_address as u32)) {
                     func.text.push_str(&format!("{}:\n", value));
@@ -1116,8 +1111,8 @@ fn handle_code_section(
             }
         }
 
-        if data_labels.contains_key(&i.try_into().unwrap()) {
-            if let Some(value) = data_labels.get(&i.try_into().unwrap()) {
+        if data_labels.contains_key(&virtual_addr.try_into().unwrap()) {
+            if let Some(value) = data_labels.get(&virtual_addr.try_into().unwrap()) {
                 // Use the label
                 if let Some(func) = disassembled_funcs.get_mut(&(start_address as u32)) {
                     func.text.push_str(&format!(
@@ -1137,13 +1132,14 @@ fn handle_code_section(
                         | ((file_contents[i as usize + 2] as u32) << 8)
                         | ((file_contents[i as usize + 3] as u32) << 0);
                     if let Some(func) = disassembled_funcs.get_mut(&(start_address as u32)) {
-                        func.text
-                            .push_str(&format!("/* {:08X} */ .long 0x{:08X}\n", i, data));
+                        func.text.push_str(&format!(
+                            "/* {:08X} */ .long 0x{:08X}\n",
+                            virtual_addr, data
+                        ));
                         monolithic.push_str(&format!("/* {:08X} */ .long 0x{:08X}\n", i, data));
                     }
 
-                    // skip next instructino since we used it
-
+                    // skip next instruction since we used it
                     skip_next = true;
                 }
                 continue;
@@ -1151,7 +1147,7 @@ fn handle_code_section(
         }
         let mut string = String::new();
         sh2_disasm(
-            i as u32,
+            i as u32 + virtual_base_addr as u32,
             instr,
             true,
             &mut string,
@@ -1159,22 +1155,25 @@ fn handle_code_section(
             &mut branch_labels,
         );
         if let Some(func) = disassembled_funcs.get_mut(&(start_address as u32)) {
-            func.text
-                .push_str(&format!("/* 0x{:08X} 0x{:04X} */ {}\n", i, instr, string));
+            func.text.push_str(&format!(
+                "/* 0x{:08X} 0x{:04X} */ {}\n",
+                virtual_addr, instr, string
+            ));
             monolithic.push_str(&format!("/* 0x{:08X} */ {}\n", i, string));
         }
     }
 
-    return (functions, disassembled_funcs);
+    return disassembled_funcs;
 }
 
 #[derive(Default)]
 struct ProcessedSection {
     is_code: bool,
-    functions: Vec<FunctionPair>,
-    disassembled_funcs: HashMap<u32, DisassembledFunc>,
+    disassembled_funcs: BTreeMap<u32, DisassembledFunc>,
     data: String,
     addr: u64,
+    vaddr: u64,
+    vbase: u64,
 }
 
 fn handle_segments(file_contents: &Vec<u8>, config: &Config) {
@@ -1214,28 +1213,38 @@ fn handle_segments(file_contents: &Vec<u8>, config: &Config) {
                             let ii = i as usize;
                             let data: u32 =
                                 ((file_contents[ii] as u32) << 8) | file_contents[ii + 1] as u32;
-                            data_str.push_str(&format!("/* 0x{:08X} */ .word 0x{:04X}\n", i, data));
+                            data_str.push_str(&format!(
+                                "/* 0x{:08X} */ .word 0x{:04X}\n",
+                                i + segment.vram,
+                                data
+                            ));
                         }
 
                         let processed_section = ProcessedSection {
                             is_code: false,
-                            functions: Vec::<FunctionPair>::new(),
-                            disassembled_funcs: HashMap::<u32, DisassembledFunc>::new(),
+                            disassembled_funcs: BTreeMap::<u32, DisassembledFunc>::new(),
                             data: data_str,
                             addr: subsegment_start,
+                            vaddr: subsegment_start + segment.vram,
+                            vbase: segment.vram,
                         };
                         processed_sections.push(processed_section);
                     } else {
                         // find functions and process
-                        let (functions, disassembled_funcs) =
-                            handle_code_section(file_contents, subsegment_start, subsegment_end);
+                        let disassembled_funcs = handle_code_section(
+                            file_contents,
+                            subsegment_start,
+                            subsegment_end,
+                            segment.vram,
+                        );
 
                         let processed_section = ProcessedSection {
                             is_code: true,
-                            functions: functions,
                             disassembled_funcs: disassembled_funcs,
                             data: "".to_string(),
                             addr: subsegment_start,
+                            vaddr: subsegment_start + segment.vram,
+                            vbase: segment.vram,
                         };
                         processed_sections.push(processed_section);
                     }
@@ -1253,15 +1262,19 @@ fn handle_segments(file_contents: &Vec<u8>, config: &Config) {
         if !processed_section.is_code {
             emit_asm_file(
                 format!(
-                    "{}/d_{:05X}.s",
-                    config.options.asm_path, processed_section.addr
+                    "{}/d{:07X}.s",
+                    config.options.asm_path, processed_section.vaddr
                 ),
                 processed_section.data.clone(),
             );
         } else {
             for (_addr, df) in &processed_section.disassembled_funcs {
                 emit_asm_file(
-                    format!("{}/f_{:05X}.s", config.options.asm_path, df.addr),
+                    format!(
+                        "{}/f{:07X}.s",
+                        config.options.asm_path,
+                        df.addr + processed_section.vbase as u32
+                    ),
                     df.text.clone(),
                 );
             }
@@ -1283,7 +1296,7 @@ fn handle_segments(file_contents: &Vec<u8>, config: &Config) {
 
             for processed_section in &processed_sections {
                 if !processed_section.is_code {
-                    let name = format!("d_{:05X}", processed_section.addr);
+                    let name = format!("d{:07X}", processed_section.vaddr);
                     writeln!(
                         &mut file,
                         "INCLUDE_ASM(\"{}\", {});",
@@ -1292,13 +1305,13 @@ fn handle_segments(file_contents: &Vec<u8>, config: &Config) {
                     )
                     .expect("Failed to write to file.");
                 } else {
-                    for pair in &processed_section.functions {
+                    for pair in &processed_section.disassembled_funcs {
                         // assume this is a empty function if the size is 8
-                        if (pair.end - pair.start == 8) && config.options.decomp_empty_funcs {
-                            writeln!(&mut file, "void {}() {{}}", pair.name)
+                        if (pair.1.end - pair.1.addr == 8) && config.options.decomp_empty_funcs {
+                            writeln!(&mut file, "void {}() {{}}", pair.1.name)
                                 .expect("Failed to write to file.");
                         } else {
-                            writeln!(&mut file, "INCLUDE_ASM(\"{}\", {});", asm_path, pair.name)
+                            writeln!(&mut file, "INCLUDE_ASM(\"{}\", {});", asm_path, pair.1.name)
                                 .expect("Failed to write to file.");
                         }
                     }
@@ -1342,6 +1355,7 @@ fn assemble(input: &str) -> Result<Vec<u8>, Box<dyn std::error::Error>> {
     // Create a temporary file for the output
     let output_file = NamedTempFile::new()?;
 
+    // assemble and dump as binary
     let cmd_str = format!(
         "sh-elf-as -o /work/{} /work/{} && sh-elf-objcopy -O binary /work/{} /work/{}",
         output_file.path().file_name().unwrap().to_string_lossy(),
@@ -1381,7 +1395,9 @@ fn assemble(input: &str) -> Result<Vec<u8>, Box<dyn std::error::Error>> {
     Ok(binary)
 }
 
-fn asm_test_case(asm: String, expected: String) {
+use similar::{ChangeTag, TextDiff};
+
+fn asm_test_case(asm: String, expected: String, virtual_base_addr: u64) {
     let output = assemble(&asm).unwrap();
 
     println!("output: {:?} ", output);
@@ -1391,11 +1407,12 @@ fn asm_test_case(asm: String, expected: String) {
 
     let mut output_string = String::new();
 
-    let (functions, disassembled_funcs) =
-        handle_code_section(&output, 0, output.len().try_into().unwrap());
-
-    println!("functions {:?}", functions);
-    println!("disassembled_funcs {:?}", disassembled_funcs);
+    let disassembled_funcs = handle_code_section(
+        &output,
+        0,
+        output.len().try_into().unwrap(),
+        virtual_base_addr,
+    );
 
     let trimmed_right: String = expected
         .lines()
@@ -1403,18 +1420,29 @@ fn asm_test_case(asm: String, expected: String) {
         .collect::<Vec<_>>()
         .join("\n");
 
-    assert_eq!(disassembled_funcs[&8].text, trimmed_right);
+    if disassembled_funcs[&8].text != trimmed_right {
+        let actual_lines = disassembled_funcs[&8].text.clone();
+        let expected_lines = trimmed_right;
+
+        let diff = TextDiff::from_lines(&expected_lines, &actual_lines);
+
+        for diff in diff.iter_all_changes() {
+            match diff.tag() {
+                ChangeTag::Delete => print!("\x1b[31m{}\x1b[0m", diff),
+                ChangeTag::Insert => print!("\x1b[32m{}\x1b[0m", diff),
+                ChangeTag::Equal => print!("{}", diff),
+            }
+        }
+        println!();
+        assert!(false);
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
- 
-    // mov.l      @(dtest-.,pc),r0
-    // is apparently the new version of @(dtest,pc), r0
-    // see https://github.com/bminor/binutils-gdb/commit/9691d64f9a558a599867a6528db1908e4c5bc63f
-    #[test]
-    fn check_mov_l_pc() {
+
+    fn test_base_mov_l(expected: String, base: u64) {
         let asm = r#"
         mov.l r8, @-r15
         mov r0, r1
@@ -1434,6 +1462,14 @@ mod tests {
         .word 0xface
         "#;
 
+        asm_test_case(asm.to_string(), expected.to_string(), base);
+    }
+
+    // mov.l      @(dtest-.,pc),r0
+    // is apparently the new version of @(dtest,pc), r0
+    // see https://github.com/bminor/binutils-gdb/commit/9691d64f9a558a599867a6528db1908e4c5bc63f
+    #[test]
+    fn check_mov_l_pc_0() {
         // TODO mov.w/mov.l should emit a label in addition to labeling as
         // data
         let expected = r#"glabel func_00000008
@@ -1449,11 +1485,30 @@ mod tests {
         /* 0x0000001A */ .word 0x0009
         "#;
 
-        asm_test_case(asm.to_string(), expected.to_string());
+        test_base_mov_l(expected.to_string(), 0);
     }
 
     #[test]
-    fn do_asm() {
+    fn check_mov_l_pc_1000() {
+        // TODO mov.w/mov.l should emit a label in addition to labeling as
+        // data
+        let expected = r#"glabel func_00001008
+        /* 0x00001008 0x2F86 */ mov.l r8, @-r15
+        /* 0x0000100A 0xD002 */ mov.l @(0x00A, pc), r0
+        /* 0x0000100C 0x9104 */ mov.w @(0x00C, pc), r1
+        /* 0x0000100E 0x000B */ rts
+        /* 0x00001010 0x0009 */ nop
+        /* 0x00001012 */ .word 0x0009
+        /* 0x00001014 */ .word 0xDEAD
+        /* 0x00001016 */ .word 0xBEEF
+        /* 0x00001018 */ .word 0xFACE
+        /* 0x0000101A */ .word 0x0009
+        "#;
+
+        test_base_mov_l(expected.to_string(), 0x1000);
+    }
+
+    fn test_base(expected: String, base: u64) {
         let asm = r#"
         mov.l r8, @-r15
         mov r0, r1
@@ -1469,8 +1524,12 @@ mod tests {
         rts
         nop
         "#;
+        asm_test_case(asm.to_string(), expected.to_string(), base);
+    }
 
-        let expected = r#"glabel func_00000008
+    #[test]
+    fn do_asm_0() {
+        let expected_0 = r#"glabel func_00000008
         /* 0x00000008 0x2F86 */ mov.l r8, @-r15
         /* 0x0000000A 0x6103 */ mov r0, r1
         /* 0x0000000C 0xA000 */ bra lab_00000010
@@ -1480,10 +1539,23 @@ mod tests {
         /* 0x00000012 0x000B */ rts
         /* 0x00000014 0x0009 */ nop
         "#;
-
-        asm_test_case(asm.to_string(), expected.to_string());
+        test_base(expected_0.to_string(), 0);
     }
 
+    #[test]
+    fn do_asm_1000() {
+        let expected = r#"glabel func_00001008
+        /* 0x00001008 0x2F86 */ mov.l r8, @-r15
+        /* 0x0000100A 0x6103 */ mov r0, r1
+        /* 0x0000100C 0xA000 */ bra lab_00001010
+        /* 0x0000100E 0x0009 */ nop
+        lab_00001010:
+        /* 0x00001010 0x6013 */ mov r1, r0
+        /* 0x00001012 0x000B */ rts
+        /* 0x00001014 0x0009 */ nop
+        "#;
+        test_base(expected.to_string(), 0x1000);
+    }
     // #[test]
     // fn test_infunc() {
     //     let ranges = vec![
