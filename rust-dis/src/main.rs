@@ -899,6 +899,8 @@ fn find_data_labels(v_addr: u32, op: u32, data_labels: &mut HashMap<u32, DataLab
 struct Options {
     target_path: String,
     asm_path: String,
+    ld_scripts_path: String,
+    syms_path: String,
     src_path: String,
     decomp_empty_funcs: bool,
 }
@@ -1260,7 +1262,8 @@ fn handle_segments(file_contents: &Vec<u8>, config: &Config) {
     // all the segments are processed, emit files
 
     std::fs::create_dir_all(&config.options.asm_path).expect("Failed to create directories.");
-
+    std::fs::create_dir_all(&config.options.ld_scripts_path).expect("Failed to create directories.");
+    std::fs::create_dir_all(&config.options.syms_path).expect("Failed to create directories.");
     // emit all the asm
     for processed_section in &processed_sections {
         if !processed_section.is_code {
@@ -1295,7 +1298,7 @@ fn handle_segments(file_contents: &Vec<u8>, config: &Config) {
             let segment_name = &segs[0].name;
             let base_addr = &segs[0].vram;
 
-            let syms_filename = format!("{}/{}_syms.txt", path, segment_name);
+            let syms_filename = format!("{}/{}_syms.txt", &config.options.syms_path, segment_name);
             let mut syms_file =
                 std::fs::File::create(syms_filename).expect("Failed to create file.");
 
@@ -1305,7 +1308,7 @@ fn handle_segments(file_contents: &Vec<u8>, config: &Config) {
 
             {
                 // write linker script
-                let filename = format!("{}/{}.ld", path, segment_name);
+                let filename = format!("{}/{}.ld", &config.options.ld_scripts_path, segment_name);
                 let mut linker_file = std::fs::File::create(filename).expect("Failed to create linker script file.");
                 let linker_script = gen_ld_script(segment_name, &format!("{:08X}", base_addr));
                 writeln!(&mut linker_file, "{}", linker_script).expect("Failed to write to linker script file.");
