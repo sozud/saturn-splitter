@@ -1182,6 +1182,51 @@ struct ProcessedSection {
     vbase: u64,
 }
 
+fn write_c_file(
+    config: &Config,
+    path: &str,
+    segment_name: &str,
+    asm_path: &str,
+    processed_sections: &Vec<ProcessedSection>,
+) {
+    let filename = format!("{}/{}.c", path, segment_name);
+    let mut file = std::fs::File::create(filename).expect("Failed to create file.");
+    writeln!(&mut file, "#include \"inc_asm.h\"").expect("Failed to write to file.");
+
+    for processed_section in processed_sections {
+        if !processed_section.is_code {
+            let name = format!("d{:07X}", processed_section.vaddr);
+            writeln!(
+                &mut file,
+                "INCLUDE_ASM(\"{}\", {}, d_{:08X});",
+                asm_path, // TODO fix hardcode
+                name,
+                processed_section.vaddr
+            )
+            .expect("Failed to write to file.");
+        } else {
+            for pair in &processed_section.disassembled_funcs {
+                // assume this is a empty function if the size is 8
+                if (pair.1.end - pair.1.addr == 8) && config.options.decomp_empty_funcs {
+                    writeln!(&mut file, "void {}() {{}}", pair.1.name)
+                        .expect("Failed to write to file.");
+                } else {
+                    writeln!(
+                        &mut file,
+                        "INCLUDE_ASM(\"{}\", {}, func_{:08X});",
+                        asm_path,
+                        pair.1.name,
+                        pair.1.addr + processed_section.vbase as u32
+                    )
+                    .expect("Failed to write to file.");
+                }
+            }
+        }
+    }
+}
+
+use std::path::Path;
+
 fn handle_segments(file_contents: &Vec<u8>, config: &Config) {
     let mut processed_sections = Vec::<ProcessedSection>::new();
     if let Some(segments) = &config.segments {
@@ -1262,7 +1307,8 @@ fn handle_segments(file_contents: &Vec<u8>, config: &Config) {
     // all the segments are processed, emit files
 
     std::fs::create_dir_all(&config.options.asm_path).expect("Failed to create directories.");
-    std::fs::create_dir_all(&config.options.ld_scripts_path).expect("Failed to create directories.");
+    std::fs::create_dir_all(&config.options.ld_scripts_path)
+        .expect("Failed to create directories.");
     std::fs::create_dir_all(&config.options.syms_path).expect("Failed to create directories.");
     // emit all the asm
     for processed_section in &processed_sections {
@@ -1302,43 +1348,31 @@ fn handle_segments(file_contents: &Vec<u8>, config: &Config) {
             let mut syms_file =
                 std::fs::File::create(syms_filename).expect("Failed to create file.");
 
-            let filename = format!("{}/{}.c", path, segment_name);
-            let mut file = std::fs::File::create(filename).expect("Failed to create file.");
-            writeln!(&mut file, "#include \"inc_asm.h\"").expect("Failed to write to file.");
+            let c_filename = format!("{}/{}.c", path, segment_name);
+
+            // don't overwite the c file if it's already existing
+            if !Path::new(&c_filename).exists() {
+                write_c_file(config, &path, &segment_name, &asm_path, &processed_sections);
+            }
 
             {
                 // write linker script
                 let filename = format!("{}/{}.ld", &config.options.ld_scripts_path, segment_name);
-                let mut linker_file = std::fs::File::create(filename).expect("Failed to create linker script file.");
+                let mut linker_file =
+                    std::fs::File::create(filename).expect("Failed to create linker script file.");
                 let linker_script = gen_ld_script(segment_name, &format!("{:08X}", base_addr));
-                writeln!(&mut linker_file, "{}", linker_script).expect("Failed to write to linker script file.");
+                writeln!(&mut linker_file, "{}", linker_script)
+                    .expect("Failed to write to linker script file.");
             }
+
+            // write symbols
             for processed_section in &processed_sections {
                 if !processed_section.is_code {
-                    let name = format!("d{:07X}", processed_section.vaddr);
-                    writeln!(
-                        &mut file,
-                        "INCLUDE_ASM(\"{}\", {}, d_{:08X});",
-                        asm_path, // TODO fix hardcode
-                        name,
-                        processed_section.vaddr
-                    )
-                    .expect("Failed to write to file.");
                 } else {
                     for pair in &processed_section.disassembled_funcs {
                         // assume this is a empty function if the size is 8
                         if (pair.1.end - pair.1.addr == 8) && config.options.decomp_empty_funcs {
-                            writeln!(&mut file, "void {}() {{}}", pair.1.name)
-                                .expect("Failed to write to file.");
                         } else {
-                            writeln!(
-                                &mut file,
-                                "INCLUDE_ASM(\"{}\", {}, func_{:08X});",
-                                asm_path,
-                                pair.1.name,
-                                pair.1.addr + processed_section.vbase as u32
-                            )
-                            .expect("Failed to write to file.");
                             // need _ prefix for name mangling
                             // seems like all asm symbols need _ to be accessible
                             // from C
@@ -1433,8 +1467,7 @@ fn assemble(input: &str) -> Result<Vec<u8>, Box<dyn std::error::Error>> {
 
 use similar::{ChangeTag, TextDiff};
 
-fn print_diff(expected_lines: String, actual_lines: String)
-{
+fn print_diff(expected_lines: String, actual_lines: String) {
     let diff = TextDiff::from_lines(&expected_lines, &actual_lines);
 
     for diff in diff.iter_all_changes() {
@@ -1486,12 +1519,21 @@ pub fn gen_ld_script(zero_prefix: &str, addr: &str) -> String {
     code.push_str("    __romPos = 0;\n");
     code.push_str("    _gp = 0x0;\n");
     code.push_str(&format!("    {}_ROM_START = __romPos;\n", zero_prefix));
-    code.push_str(&format!("    {}_VRAM = ADDR(.{});\n", zero_prefix, zero_prefix));
-    code.push_str(&format!("    .{} 0x{} : AT({}_ROM_START) SUBALIGN(2)\n    {{\n", zero_prefix, addr, zero_prefix));
+    code.push_str(&format!(
+        "    {}_VRAM = ADDR(.{});\n",
+        zero_prefix, zero_prefix
+    ));
+    code.push_str(&format!(
+        "    .{} 0x{} : AT({}_ROM_START) SUBALIGN(2)\n    {{\n",
+        zero_prefix, addr, zero_prefix
+    ));
     code.push_str(&format!("        {}_TEXT_START = .;\n", zero_prefix));
     code.push_str(&format!("        {}.o(.text);\n", zero_prefix));
     code.push_str(&format!("        {}_TEXT_END = .;\n", zero_prefix));
-    code.push_str(&format!("        {}_TEXT_SIZE = ABSOLUTE({}_TEXT_END - {}_TEXT_START);\n    }}\n", zero_prefix, zero_prefix, zero_prefix));
+    code.push_str(&format!(
+        "        {}_TEXT_SIZE = ABSOLUTE({}_TEXT_END - {}_TEXT_START);\n    }}\n",
+        zero_prefix, zero_prefix, zero_prefix
+    ));
     code.push_str(&format!("    __romPos += SIZEOF(.{});\n", zero_prefix));
     code.push_str("    __romPos = ALIGN(__romPos, 16);\n");
     code.push_str(&format!("    {}_ROM_END = __romPos;\n", zero_prefix));
