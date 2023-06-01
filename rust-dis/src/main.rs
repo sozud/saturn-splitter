@@ -948,10 +948,14 @@ fn emit_c_file(functions: &BTreeMap<u32, DisassembledFunc>, output_path: String)
     let mut file = std::fs::File::create(filename).expect("Failed to create file.");
     writeln!(&mut file, "#include \"inc_asm.h\"").expect("Failed to write to file.");
     for pair in functions {
+        let mut label = &format!("d_{:08X}", pair.1.addr);
+        if !pair.1.data {
+            let mut label = &format!("func_{:08X}", pair.1.addr);
+        }
         writeln!(
             &mut file,
-            "INCLUDE_ASM(\"{}\", {});",
-            pair.1.file, pair.1.name
+            "INCLUDE_ASM(\"{}\", {}, \"{}\");",
+            pair.1.file, pair.1.name, label
         )
         .expect("Failed to write to file.");
     }
@@ -1289,19 +1293,32 @@ fn handle_segments(file_contents: &Vec<u8>, config: &Config) {
     if let Some(segs) = &config.segments {
         if !segs.is_empty() {
             let segment_name = &segs[0].name;
+            let base_addr = &segs[0].vram;
+
+            let syms_filename = format!("{}/{}_syms.txt", path, segment_name);
+            let mut syms_file =
+                std::fs::File::create(syms_filename).expect("Failed to create file.");
 
             let filename = format!("{}/{}.c", path, segment_name);
             let mut file = std::fs::File::create(filename).expect("Failed to create file.");
             writeln!(&mut file, "#include \"inc_asm.h\"").expect("Failed to write to file.");
 
+            {
+                // write linker script
+                let filename = format!("{}/{}.ld", path, segment_name);
+                let mut linker_file = std::fs::File::create(filename).expect("Failed to create linker script file.");
+                let linker_script = gen_ld_script(segment_name, &format!("{:08X}", base_addr));
+                writeln!(&mut linker_file, "{}", linker_script).expect("Failed to write to linker script file.");
+            }
             for processed_section in &processed_sections {
                 if !processed_section.is_code {
                     let name = format!("d{:07X}", processed_section.vaddr);
                     writeln!(
                         &mut file,
-                        "INCLUDE_ASM(\"{}\", {});",
+                        "INCLUDE_ASM(\"{}\", {}, d_{:08X});",
                         asm_path, // TODO fix hardcode
-                        name
+                        name,
+                        processed_section.vaddr
                     )
                     .expect("Failed to write to file.");
                 } else {
@@ -1311,8 +1328,24 @@ fn handle_segments(file_contents: &Vec<u8>, config: &Config) {
                             writeln!(&mut file, "void {}() {{}}", pair.1.name)
                                 .expect("Failed to write to file.");
                         } else {
-                            writeln!(&mut file, "INCLUDE_ASM(\"{}\", {});", asm_path, pair.1.name)
-                                .expect("Failed to write to file.");
+                            writeln!(
+                                &mut file,
+                                "INCLUDE_ASM(\"{}\", {}, func_{:08X});",
+                                asm_path,
+                                pair.1.name,
+                                pair.1.addr + processed_section.vbase as u32
+                            )
+                            .expect("Failed to write to file.");
+                            // need _ prefix for name mangling
+                            // seems like all asm symbols need _ to be accessible
+                            // from C
+                            writeln!(
+                                &mut syms_file,
+                                "_func_{:08X} = 0x{:08X};",
+                                pair.1.addr + processed_section.vbase as u32,
+                                pair.1.addr + processed_section.vbase as u32
+                            )
+                            .expect("Failed to write to file.");
                         }
                     }
                 }
@@ -1397,6 +1430,20 @@ fn assemble(input: &str) -> Result<Vec<u8>, Box<dyn std::error::Error>> {
 
 use similar::{ChangeTag, TextDiff};
 
+fn print_diff(expected_lines: String, actual_lines: String)
+{
+    let diff = TextDiff::from_lines(&expected_lines, &actual_lines);
+
+    for diff in diff.iter_all_changes() {
+        match diff.tag() {
+            ChangeTag::Delete => print!("\x1b[31m{}\x1b[0m", diff),
+            ChangeTag::Insert => print!("\x1b[32m{}\x1b[0m", diff),
+            ChangeTag::Equal => print!("{}", diff),
+        }
+    }
+    println!();
+}
+
 fn asm_test_case(asm: String, expected: String, virtual_base_addr: u64) {
     let output = assemble(&asm).unwrap();
 
@@ -1424,23 +1471,69 @@ fn asm_test_case(asm: String, expected: String, virtual_base_addr: u64) {
         let actual_lines = disassembled_funcs[&8].text.clone();
         let expected_lines = trimmed_right;
 
-        let diff = TextDiff::from_lines(&expected_lines, &actual_lines);
-
-        for diff in diff.iter_all_changes() {
-            match diff.tag() {
-                ChangeTag::Delete => print!("\x1b[31m{}\x1b[0m", diff),
-                ChangeTag::Insert => print!("\x1b[32m{}\x1b[0m", diff),
-                ChangeTag::Equal => print!("{}", diff),
-            }
-        }
-        println!();
+        print_diff(expected_lines, actual_lines);
         assert!(false);
     }
+}
+
+pub fn gen_ld_script(zero_prefix: &str, addr: &str) -> String {
+    let mut code = String::new();
+
+    code.push_str("SECTIONS\n{\n");
+    code.push_str("    __romPos = 0;\n");
+    code.push_str("    _gp = 0x0;\n");
+    code.push_str(&format!("    {}_ROM_START = __romPos;\n", zero_prefix));
+    code.push_str(&format!("    {}_VRAM = ADDR(.{});\n", zero_prefix, zero_prefix));
+    code.push_str(&format!("    .{} 0x{} : AT({}_ROM_START) SUBALIGN(2)\n    {{\n", zero_prefix, addr, zero_prefix));
+    code.push_str(&format!("        {}_TEXT_START = .;\n", zero_prefix));
+    code.push_str(&format!("        {}.o(.text);\n", zero_prefix));
+    code.push_str(&format!("        {}_TEXT_END = .;\n", zero_prefix));
+    code.push_str(&format!("        {}_TEXT_SIZE = ABSOLUTE({}_TEXT_END - {}_TEXT_START);\n    }}\n", zero_prefix, zero_prefix, zero_prefix));
+    code.push_str(&format!("    __romPos += SIZEOF(.{});\n", zero_prefix));
+    code.push_str("    __romPos = ALIGN(__romPos, 16);\n");
+    code.push_str(&format!("    {}_ROM_END = __romPos;\n", zero_prefix));
+    code.push_str(&format!("    {}_VRAM_END = .;\n", zero_prefix));
+    code.push_str("\n    /DISCARD/ :\n    {\n");
+    code.push_str("        *(*);\n    }\n");
+    code.push_str("}");
+
+    code
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn test_ld_script() {
+        let expected = r#"SECTIONS
+{
+    __romPos = 0;
+    _gp = 0x0;
+    zero_ROM_START = __romPos;
+    zero_VRAM = ADDR(.zero);
+    .zero 0x06004080 : AT(zero_ROM_START) SUBALIGN(2)
+    {
+        zero_TEXT_START = .;
+        zero.o(.text);
+        zero_TEXT_END = .;
+        zero_TEXT_SIZE = ABSOLUTE(zero_TEXT_END - zero_TEXT_START);
+    }
+    __romPos += SIZEOF(.zero);
+    __romPos = ALIGN(__romPos, 16);
+    zero_ROM_END = __romPos;
+    zero_VRAM_END = .;
+
+    /DISCARD/ :
+    {
+        *(*);
+    }
+}"#;
+
+        let actual = gen_ld_script("zero", "0x06004080");
+        print_diff(expected.to_string(), actual.clone());
+        assert!(expected == actual);
+    }
 
     fn test_base_mov_l(expected: String, base: u64) {
         let asm = r#"

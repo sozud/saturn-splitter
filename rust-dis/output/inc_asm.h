@@ -8,28 +8,13 @@
 
 #ifndef INCLUDE_ASM
 
-// #define INCLUDE_ASM(FOLDER, NAME)                                              \
-//     __asm__(".section .text\n"                                                 \
-//             "\t.align\t2\n"                                                    \
-//             "\t.globl\t" #NAME "\n"                                            \
-//             ".include \"" FOLDER "/" #NAME ".s\"\n"                            \
-//             "\t.end\t" #NAME);
-// #endif
 
-	// .text
-	// .align 2
-	// .global	_func_80173E78
-
-#define INCLUDE_ASM(FOLDER, NAME)                                              \
+#define INCLUDE_ASM(FOLDER, NAME, LABEL)                                              \
     __asm__(".text\n"                                                 \
             "\t.align\t2\n"                                                    \
-            "\t.global\t" #NAME "\n"                                            \
+            "\t.global\t _" #LABEL "\n"                                            \
             ".include \"" FOLDER "/" #NAME ".s\"\n");
 #endif
-
-// #define INCLUDE_ASM(FOLDER, NAME)                                              \
-//     __asm__(".include \"" FOLDER "/" #NAME ".s\"\n");
-// #endif
 
 // omit .global
 __asm__(".include \"macro.inc\"\n");
