@@ -1397,6 +1397,27 @@ fn main() {
     let args: Vec<String> = env::args().collect();
 
     if let Some(filename) = args.get(1) {
+
+        if filename == "--find-funcs"
+        {
+            if let Some(funcs_filename) = args.get(2) {
+                match read_file_to_vec(&funcs_filename) {
+                    Ok(file_contents) => {
+                        let mut ranges = Vec::<FunctionRange>::new();
+                        find_funcs(&file_contents, 0, file_contents.len() as u64, &mut ranges);
+                        for range in ranges
+                        {
+                            println!("{:08X}-{:08X}", range.phys_start, range.phys_end);
+                        }
+                    }
+                    Err(error) => {
+                        // Error reading the file
+                        println!("Error: {:?} {}", error, funcs_filename);
+                    }
+                }
+            }
+            return;
+        }
         println!("Reading: {}", filename);
         let config = parse_yaml2(filename.to_string());
 
