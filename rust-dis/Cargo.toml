@@ -8,6 +8,7 @@ edition = "2021"
 [dependencies]
 formatx = "0.2.1"
 libc = "0.2.144"
+regex = "1.8.4"
 serde = "1.0.163"
 serde_derive = "1.0.163"
 serde_yaml = "0.9.21"

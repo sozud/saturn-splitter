@@ -5,7 +5,12 @@ use serde_yaml;
 use std::collections::BTreeMap;
 use std::collections::HashMap;
 use std::fs::File;
-use std::io::{self, Read};
+use std::io::{self, Read, BufRead};
+use std::path::Path;
+use regex::Regex;
+use std::collections::HashSet;
+use std::io::BufReader;
+
 struct DataLabel {
     size: u32,
     label: String,
@@ -1225,7 +1230,21 @@ fn write_c_file(
     }
 }
 
-use std::path::Path;
+fn find_include_asm_in_c_file(filename: &str) -> io::Result<HashSet<String>> {
+    let file = File::open(filename)?;
+    let reader = BufReader::new(file);
+    let re = Regex::new(r#"INCLUDE_ASM\("(.*?)", (.*?), (.*?)\)"#).unwrap();
+    let mut result = HashSet::new();
+
+    for res in reader.lines() {
+        if let Some(caps) = re.captures(&res.unwrap().to_string()) {
+            let func_name = caps.get(3).unwrap().as_str().to_string();
+            result.insert(func_name);
+        }
+    }
+
+    Ok(result)
+}
 
 fn handle_segments(file_contents: &Vec<u8>, config: &Config) {
     let mut processed_sections = Vec::<ProcessedSection>::new();
@@ -1304,9 +1323,34 @@ fn handle_segments(file_contents: &Vec<u8>, config: &Config) {
         }
     }
 
+    let mut includes: Option<HashSet<String>> = None;
+
+    // determine first what has been decompiled
+    if let Some(segs) = &config.segments {
+        if !segs.is_empty() {
+            let segment_name = &segs[0].name;
+            let base_addr = &segs[0].vram;
+            let path = &config.options.src_path;
+            let c_filename = format!("{}/{}.c", path, segment_name);
+            if Path::new(&c_filename).exists() {
+
+                match find_include_asm_in_c_file(&c_filename) {
+                    Ok(set) => includes = Some(set),
+                    Err(err) => {
+                        eprintln!("Error reading the file: {}", err);
+                    }
+                }
+            }
+        }
+    }
+
     // all the segments are processed, emit files
 
     std::fs::create_dir_all(&config.options.asm_path).expect("Failed to create directories.");
+    std::fs::create_dir_all(&format!("{}/f_nonmat",config.options.asm_path)).expect("Failed to create directories.");
+    std::fs::create_dir_all(&format!("{}/f_match",config.options.asm_path)).expect("Failed to create directories.");
+    std::fs::create_dir_all(&format!("{}/data",config.options.asm_path)).expect("Failed to create directories.");
+
     std::fs::create_dir_all(&config.options.ld_scripts_path)
         .expect("Failed to create directories.");
     std::fs::create_dir_all(&config.options.syms_path).expect("Failed to create directories.");
@@ -1315,21 +1359,38 @@ fn handle_segments(file_contents: &Vec<u8>, config: &Config) {
         if !processed_section.is_code {
             emit_asm_file(
                 format!(
-                    "{}/d{:07X}.s",
+                    "{}/data/d{:07X}.s",
                     config.options.asm_path, processed_section.vaddr
                 ),
                 processed_section.data.clone(),
             );
         } else {
             for (_addr, df) in &processed_section.disassembled_funcs {
-                emit_asm_file(
-                    format!(
-                        "{}/f{:07X}.s",
-                        config.options.asm_path,
-                        df.addr + processed_section.vbase as u32
-                    ),
-                    df.text.clone(),
-                );
+                let func_name = format!("func_{:08X}", df.addr + processed_section.vbase as u32);
+                
+                if let Some(includes_set) = &includes {
+                    if includes_set.contains(&func_name) {
+                        // this has not been decompiled
+                        emit_asm_file(
+                            format!(
+                                "{}/f_nonmat/f{:07X}.s",
+                                config.options.asm_path,
+                                df.addr + processed_section.vbase as u32
+                            ),
+                            df.text.clone(),
+                        );
+                    } else {
+                        // has been decompiled
+                        emit_asm_file(
+                            format!(
+                                "{}/f_match/f{:07X}.s",
+                                config.options.asm_path,
+                                df.addr + processed_section.vbase as u32
+                            ),
+                            df.text.clone(),
+                        );
+                    }
+                }
             }
         }
     }
