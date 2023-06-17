@@ -369,7 +369,7 @@ fn match_ff00(
         0x8500 => {
             if (op & 0x100) == 0x100 {
                 string.push_str(&format!(
-                    "mov.b @(0x{:03X}, r{}), r0",
+                    "mov.w @(0x{:03X}, r{}), r0",
                     (op & 0xf) * 2,
                     (op >> 4) & 0xf
                 ))
@@ -1966,5 +1966,37 @@ mod tests {
             &mut branch_labels,
         );
         assert_eq!(string, "mov.w r1, @(r0, r14)");
+    }
+
+    #[test]
+    fn test_8450() {
+        let mut string = String::new();
+        let mut data_labels = HashMap::<u32, DataLabel>::new();
+        let mut branch_labels = HashMap::<u32, String>::new();
+        sh2_disasm(
+            0x7a,
+            0x8450,
+            true,
+            &mut string,
+            &mut data_labels,
+            &mut branch_labels,
+        );
+        assert_eq!(string, "mov.b @(0x000, r5), r0");
+    }
+
+    #[test]
+    fn test_8550() {
+        let mut string = String::new();
+        let mut data_labels = HashMap::<u32, DataLabel>::new();
+        let mut branch_labels = HashMap::<u32, String>::new();
+        sh2_disasm(
+            0x7a,
+            0x8550,
+            true,
+            &mut string,
+            &mut data_labels,
+            &mut branch_labels,
+        );
+        assert_eq!(string, "mov.w @(0x000, r5), r0");
     }
 }
