@@ -1233,7 +1233,7 @@ fn write_c_file(
 fn find_include_asm_in_c_file(filename: &str) -> io::Result<HashSet<String>> {
     let file = File::open(filename)?;
     let reader = BufReader::new(file);
-    let re = Regex::new(r#"INCLUDE_ASM\("(.*?)", (.*?), (.*?)\)"#).unwrap();
+    let re = Regex::new(r#"INCLUDE_ASM(?:_NO_ALIGN)?\("(.*?)", (.*?), (.*?)\)"#).unwrap();
     let mut result = HashSet::new();
 
     for res in reader.lines() {
