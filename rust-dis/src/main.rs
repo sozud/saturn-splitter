@@ -73,13 +73,39 @@ fn match_nd8_f(
     match op & 0xf000 {
         0x9000 => {
             // "mov.w @(0x%03X, pc), r%d"
-            string.push_str(&format!(
-                "mov.w @(0x{:03X}, pc), r{}",
-                (op & 0xff) * 2 + 4,
-                (op >> 8) & 0xf
-            ));
+            // string.push_str(&format!(
+            //     "mov.w @(0x{:03X}, pc), r{}",
+            //     (op & 0xff) * 2 + 4,
+            //     (op >> 8) & 0xf
+            // ));
+
+            let thing = (op & 0xff) * 2 + 4 + v_addr;
+
+            if data_labels.contains_key(&thing) {
+                if let Some(value) = data_labels.get(&thing) {
+                    // Use the label
+                    // string.push_str(&format!("bra {}", value));
+
+                    string.push_str(&format!(
+                        "mov.w @({}-., pc), r{}",
+                        value.label,
+                        (op >> 8) & 0xf
+                    ));
+                }
+            } else {
+                // use an address
+                // string.push_str(&format!("bra 0x{:08X}", addr));
+
+                string.push_str(&format!(
+                    "mov.w @(0x{:03X}, pc), r{}",
+                    (op & 0xff) * 2 + 4,
+                    (op >> 8) & 0xf
+                ));
+            }
         }
         0xd000 => {
+            // emit a label if we can...
+
             // "mov.l @(0x%03X, pc), r%d"
             let v_addr_aligned = (v_addr & 0xfffffffc) == 0;
             // this post explains part of issue. https://dcemulation.org/phpBB/viewtopic.php?style=41&t=105661
@@ -92,17 +118,72 @@ fn match_nd8_f(
                 // subtract 2 from target_a
                 target_a -= 2;
 
-                string.push_str(&format!(
-                    "mov.l @(0x{:03X}, pc), r{}",
-                    target_a,
-                    (op >> 8) & 0xf
-                ));
+                let thing = test - 2;
+
+                println!("looking for {:08X}",thing);
+
+
+
+                if data_labels.contains_key(&thing) {
+                    if let Some(value) = data_labels.get(&thing) {
+                        // Use the label
+                        // string.push_str(&format!("bra {}", value));
+
+                        string.push_str(&format!(
+                            "mov.l @({}-., pc), r{}",
+                            value.label,
+                            (op >> 8) & 0xf
+                        ));
+                    }
+                } else {
+                    // use an address
+                    // string.push_str(&format!("bra 0x{:08X}", addr));
+
+                    string.push_str(&format!(
+                        "mov.l @(0x{:03X}, pc), r{}",
+                        target_a,
+                        (op >> 8) & 0xf
+                    ));
+                }
+
+                // string.push_str(&format!(
+                //     "mov.l @(0x{:03X}, pc), r{}",
+                //     target_a,
+                //     (op >> 8) & 0xf
+                // ));
             } else {
-                string.push_str(&format!(
-                    "mov.l @(0x{:03X}, pc), r{}",
-                    target_a,
-                    (op >> 8) & 0xf
-                ));
+
+                // how to get absolute address?
+
+                println!("looking for {:08X}", test);
+
+                    if data_labels.contains_key(&test) {
+                        if let Some(value) = data_labels.get(&test) {
+                            // Use the label
+                            // string.push_str(&format!("bra {}", value));
+
+                            string.push_str(&format!(
+                                "mov.l @({}-., pc), r{}",
+                                value.label,
+                                (op >> 8) & 0xf
+                            ));
+                        }
+                    } else {
+                        // use an address
+                        // string.push_str(&format!("bra 0x{:08X}", addr));
+
+                        string.push_str(&format!(
+                            "mov.l @(0x{:03X}, pc), r{}",
+                            target_a,
+                            (op >> 8) & 0xf
+                        ));
+                    }
+
+                // string.push_str(&format!(
+                //     "mov.l @(0x{:03X}, pc), r{}",
+                //     target_a,
+                //     (op >> 8) & 0xf
+                // ));
             }
         }
         _ => match_i_f(v_addr, op, mode, string, data_labels, branch_labels),
@@ -790,6 +871,13 @@ fn infunc_extended(i: u32, ranges: &Vec<FunctionRange>) -> (bool, u32) {
         }
     }
 
+    // if this is the last func go to end
+    let last_func = &ranges[ranges.len() - 1];
+    if i >= last_func.phys_start
+    {
+        return (true, last_func.phys_start);
+    }
+
     (false, 0)
 }
 
@@ -854,6 +942,35 @@ fn find_branch_labels(v_addr: u32, op: u32, branch_labels: &mut HashMap<u32, Str
     }
 }
 
+// 0xd000 => {
+//     // emit a label if we can...
+
+//     // "mov.l @(0x%03X, pc), r%d"
+//     let v_addr_aligned = (v_addr & 0xfffffffc) == 0;
+//     // this post explains part of issue. https://dcemulation.org/phpBB/viewtopic.php?style=41&t=105661
+//     let mut target_a = (op & 0xff) * 4 + 4;
+//     let target_b = ((op & 0xff) * 4 + 4 + v_addr) & 0xfffffffc;
+//     let test = (op & 0xff) * 4 + 4 + v_addr;
+
+//     // gas alignment issue.
+//     if (test & 3) == 2 {
+//         // subtract 2 from target_a
+//         target_a -= 2;
+
+//         string.push_str(&format!(
+//             "mov.l @(0x{:03X}, pc), r{}",
+//             target_a,
+//             (op >> 8) & 0xf
+//         ));
+//     } else {
+//         string.push_str(&format!(
+//             "mov.l @(0x{:03X}, pc), r{}",
+//             target_a,
+//             (op >> 8) & 0xf
+//         ));
+//     }
+// }
+
 fn find_data_labels(v_addr: u32, op: u32, data_labels: &mut HashMap<u32, DataLabel>) {
     // is this already marked as data?
     if data_labels.contains_key(&v_addr.try_into().unwrap()) {
@@ -873,6 +990,7 @@ fn find_data_labels(v_addr: u32, op: u32, data_labels: &mut HashMap<u32, DataLab
 
     if (op & 0xf000) == 0x9000 {
         let addr = (op & 0xff) * 2 + 4 + v_addr;
+        println!("Adding w {:08X}", addr);
         add_data_label(v_addr, addr, 2, data_labels);
     } else if (op & 0xf000) == 0xd000 {
         let target = ((op & 0xff) * 4 + 4 + v_addr) & 0xfffffffc;
@@ -891,6 +1009,7 @@ fn find_data_labels(v_addr: u32, op: u32, data_labels: &mut HashMap<u32, DataLab
             println!("problem {:08X}", v_addr);
             return;
         }
+        println!("Adding l {:08X}", target);
         add_data_label(v_addr, target, 4, data_labels);
     }
 }
@@ -979,6 +1098,62 @@ struct DisassembledFunc {
     file: String,
 }
 
+fn check_data_labels(
+    virtual_addr : u32,
+    data_labels: &HashMap::<u32, DataLabel>,
+    skip_next: &mut bool,
+    should_continue: &mut bool,
+    file_contents: &Vec<u8>,
+    start_address: u32,
+    disassembled_funcs: & mut BTreeMap::<u32, DisassembledFunc>,
+    i: u32,
+    instr: u16
+)
+{
+    println!("check_data_labels:looking for {:08X}", virtual_addr);
+    if data_labels.contains_key(&virtual_addr.try_into().unwrap()) {
+        if let Some(value) = data_labels.get(&virtual_addr.try_into().unwrap()) {
+            // Use the label
+
+            println!("found data label start_address {:08X}", start_address);
+            if let Some(func) = disassembled_funcs.get_mut(&(start_address as u32)) {
+                println!("found data label - emit 1");
+
+                func.text.push_str(&format!(
+                    "{}: /* source: {:08X} */\n",
+                    value.label, value.source
+                ));
+                // monolithic.push_str(&format!("{}:\n", value.label));
+            }
+            if value.size == 2 {
+                if let Some(func) = disassembled_funcs.get_mut(&(start_address as u32)) {
+                    println!("found data label - emit 2");
+
+                    func.text.push_str(&format!(".word 0x{:04X}\n", instr));
+                    // monolithic.push_str(&format!(".word 0x{:04X}\n", instr));
+                }
+            } else if value.size == 4 {
+                let data = ((file_contents[i as usize + 0] as u32) << 24)
+                    | ((file_contents[i as usize + 1] as u32) << 16)
+                    | ((file_contents[i as usize + 2] as u32) << 8)
+                    | ((file_contents[i as usize + 3] as u32) << 0);
+                if let Some(func) = disassembled_funcs.get_mut(&(start_address as u32)) {
+                    println!("found data label - emit 3");
+                    func.text.push_str(&format!(
+                        "/* {:08X} */ .long 0x{:08X}\n",
+                        virtual_addr, data
+                    ));
+                    // monolithic.push_str(&format!("/* {:08X} */ .long 0x{:08X}\n", i, data));
+                }
+
+                // skip next instruction since we used it
+                *skip_next = true;
+            }
+            *should_continue = true;
+        }
+    }
+}
+
 fn handle_code_section(
     file_contents: &Vec<u8>,
     section_start: u64,
@@ -1041,61 +1216,87 @@ fn handle_code_section(
     let mut skip_next = false;
 
     for i in (section_start..section_end).step_by(2) {
+        println!("i is {:08X}", i);
         let virtual_addr = TryInto::<u32>::try_into(i).unwrap() + virtual_base_addr as u32;
         if skip_next {
             skip_next = false;
+            println!("i is {:08X} skip_next", i);
             continue;
         }
 
         let ii = i as usize;
         let instr: u32 = ((file_contents[ii] as u32) << 8) | file_contents[ii + 1] as u32;
 
-        let (is_in_func, start_address) = infunc(i as u32, &ranges);
+        // let (is_in_func, start_address) = infunc(i as u32, &ranges);
 
-        // the last function needs to emit data up until the next section
 
-        let (is_in_func_extended, start_address_extended) = infunc_extended(i as u32, &ranges);
+        // // the last function needs to emit data up until the next section
 
-        let (beyond_last_func, beyond_addr) = is_beyond_last_func(i as u32, &ranges);
+        let (is_in_func, start_address) = infunc_extended(i as u32, &ranges);
+        println!("is_in_func {} start_address {:08X}", is_in_func, start_address);
 
-        if beyond_last_func {
-            if let Some(func) = disassembled_funcs.get_mut(&(beyond_addr as u32)) {
-                func.text.push_str(&format!(
-                    "/* 0x{:08X} */ .word 0x{:04X}\n",
-                    virtual_addr, instr
-                ));
+        // let (beyond_last_func, beyond_addr) = is_beyond_last_func(i as u32, &ranges);
+
+        // if beyond_last_func {
+        //     // check data labels
+
+        //     let mut should_continue: bool = false;
+        //     check_data_labels(virtual_addr,
+        //     &data_labels,
+        //     & mut skip_next,
+        //     & mut should_continue,
+        //     & file_contents,
+        //     start_address,
+        //     & mut disassembled_funcs,
+        //     i as u32,
+        //     instr as u16);
+    
+        //     if should_continue
+        //     {
+        //         continue;
+        //     }
+
+        //     if let Some(func) = disassembled_funcs.get_mut(&(beyond_addr as u32)) {
+        //         func.text.push_str(&format!(
+        //             "/* 0x{:08X} */ .word 0x{:04X}\n",
+        //             virtual_addr, instr
+        //         ));
+        //     }
+
+        //     if ii as u64 >= section_end - 2 {
+        //         break;
+        //     }
+        //     continue;
+        // }
+
+        // if !is_in_func && is_in_func_extended {
+        //     // data after function, emit for individual files
+        //     monolithic.push_str(&format!("/* 0x{:08X} */ .word 0x{:04X}\n", i, instr));
+
+        //     if let Some(func) = disassembled_funcs.get_mut(&(start_address_extended as u32)) {
+        //         func.text.push_str(&format!(
+        //             "/* 0x{:08X} */ .word 0x{:04X}\n",
+        //             virtual_addr, instr
+        //         ));
+        //     }
+        // }
+
+        // // if !is_in_func {
+        // //     // check if there's data labels here.
+
+        // //     monolithic.push_str(&format!("/* 0x{:08X} */ .word 0x{:04X}\n", i, instr));
+        // //     continue;
+        // // } else {
+        //     // if this is the first instruction emit the function label
+        if i as u32 == start_address {
+            if let Some(func) = disassembled_funcs.get_mut(&(start_address as u32)) {
+                func.text
+                    .push_str(&format!("glabel func_{:08X}\n", virtual_addr));
             }
-
-            if ii as u64 >= section_end - 2 {
-                break;
-            }
-            continue;
         }
+        // // }
 
-        if !is_in_func && is_in_func_extended {
-            // data after function, emit for individual files
-            monolithic.push_str(&format!("/* 0x{:08X} */ .word 0x{:04X}\n", i, instr));
-
-            if let Some(func) = disassembled_funcs.get_mut(&(start_address_extended as u32)) {
-                func.text.push_str(&format!(
-                    "/* 0x{:08X} */ .word 0x{:04X}\n",
-                    virtual_addr, instr
-                ));
-            }
-        }
-
-        if !is_in_func {
-            monolithic.push_str(&format!("/* 0x{:08X} */ .word 0x{:04X}\n", i, instr));
-            continue;
-        } else {
-            // if this is the first instruction emit the function label
-            if i as u32 == start_address {
-                if let Some(func) = disassembled_funcs.get_mut(&(start_address as u32)) {
-                    func.text
-                        .push_str(&format!("glabel func_{:08X}\n", virtual_addr));
-                }
-            }
-        }
+        // // thinking we 
 
         if let Some(func) = disassembled_funcs.get_mut(&(start_address as u32)) {
             if func.data {
@@ -1103,6 +1304,8 @@ fn handle_code_section(
                     "/* 0x{:08X} */ .word 0x{:04X}\n",
                     virtual_addr, instr
                 ));
+                println!("i is {:08X} func.data continue", i);
+
                 continue;
             }
         }
@@ -1117,40 +1320,25 @@ fn handle_code_section(
             }
         }
 
-        if data_labels.contains_key(&virtual_addr.try_into().unwrap()) {
-            if let Some(value) = data_labels.get(&virtual_addr.try_into().unwrap()) {
-                // Use the label
-                if let Some(func) = disassembled_funcs.get_mut(&(start_address as u32)) {
-                    func.text.push_str(&format!(
-                        "{}: /* source: {:08X} */\n",
-                        value.label, value.source
-                    ));
-                    monolithic.push_str(&format!("{}:\n", value.label));
-                }
-                if value.size == 2 {
-                    if let Some(func) = disassembled_funcs.get_mut(&(start_address as u32)) {
-                        func.text.push_str(&format!(".word 0x{:04X}\n", instr));
-                        monolithic.push_str(&format!(".word 0x{:04X}\n", instr));
-                    }
-                } else if value.size == 4 {
-                    let data = ((file_contents[i as usize + 0] as u32) << 24)
-                        | ((file_contents[i as usize + 1] as u32) << 16)
-                        | ((file_contents[i as usize + 2] as u32) << 8)
-                        | ((file_contents[i as usize + 3] as u32) << 0);
-                    if let Some(func) = disassembled_funcs.get_mut(&(start_address as u32)) {
-                        func.text.push_str(&format!(
-                            "/* {:08X} */ .long 0x{:08X}\n",
-                            virtual_addr, data
-                        ));
-                        monolithic.push_str(&format!("/* {:08X} */ .long 0x{:08X}\n", i, data));
-                    }
+        // println!("checking data labels {:08X}", virtual_addr);
 
-                    // skip next instruction since we used it
-                    skip_next = true;
-                }
-                continue;
-            }
+        let mut should_continue: bool = false;
+        check_data_labels(virtual_addr,
+        &data_labels,
+        & mut skip_next,
+        & mut should_continue,
+        & file_contents,
+        start_address,
+        & mut disassembled_funcs,
+        i as u32,
+        instr as u16);
+
+        if should_continue
+        {
+            println!("i is {:08X} should_continue", i);
+            continue;
         }
+
         let mut string = String::new();
         sh2_disasm(
             i as u32 + virtual_base_addr as u32,
@@ -1407,7 +1595,9 @@ fn main() {
                         find_funcs(&file_contents, 0, file_contents.len() as u64, &mut ranges);
                         for range in ranges
                         {
-                            println!("{:08X}-{:08X}", range.phys_start, range.phys_end);
+                            // println!("{:08X}-{:08X}", range.phys_start, range.phys_end);
+                            println!("0x{:08X},", range.phys_start + 0x06066000);
+
                         }
                     }
                     Err(error) => {
@@ -1631,19 +1821,31 @@ mod tests {
     fn check_mov_l_pc_0() {
         // TODO mov.w/mov.l should emit a label in addition to labeling as
         // data
+        // let expected = r#"glabel func_00000008
+        // /* 0x00000008 0x2F86 */ mov.l r8, @-r15
+        // /* 0x0000000A 0xD002 */ mov.l @(0x00A, pc), r0
+        // /* 0x0000000C 0x9104 */ mov.w @(0x00C, pc), r1
+        // /* 0x0000000E 0x000B */ rts
+        // /* 0x00000010 0x0009 */ nop
+        // /* 0x00000012 */ .word 0x0009
+        // /* 0x00000014 */ .word 0xDEAD
+        // /* 0x00000016 */ .word 0xBEEF
+        // /* 0x00000018 */ .word 0xFACE
+        // /* 0x0000001A */ .word 0x0009
+        // "#;
         let expected = r#"glabel func_00000008
-        /* 0x00000008 0x2F86 */ mov.l r8, @-r15
-        /* 0x0000000A 0xD002 */ mov.l @(0x00A, pc), r0
-        /* 0x0000000C 0x9104 */ mov.w @(0x00C, pc), r1
-        /* 0x0000000E 0x000B */ rts
-        /* 0x00000010 0x0009 */ nop
-        /* 0x00000012 */ .word 0x0009
-        /* 0x00000014 */ .word 0xDEAD
-        /* 0x00000016 */ .word 0xBEEF
-        /* 0x00000018 */ .word 0xFACE
-        /* 0x0000001A */ .word 0x0009
-        "#;
-
+                        /* 0x00000008 0x2F86 */ mov.l r8, @-r15
+                        /* 0x0000000A 0xD002 */ mov.l @(dat_00000014-., pc), r0
+                        /* 0x0000000C 0x9104 */ mov.w @(dat_00000018-., pc), r1
+                        /* 0x0000000E 0x000B */ rts
+                        /* 0x00000010 0x0009 */ nop
+                        /* 0x00000012 0x0009 */ nop
+                        dat_00000014: /* source: 0000000A */
+                        /* 00000014 */ .long 0xDEADBEEF
+                        dat_00000018: /* source: 0000000C */
+                        .word 0xFACE
+                        /* 0x0000001A 0x0009 */ nop
+                        "#;
         test_base_mov_l(expected.to_string(), 0);
     }
 
@@ -1653,15 +1855,16 @@ mod tests {
         // data
         let expected = r#"glabel func_00001008
         /* 0x00001008 0x2F86 */ mov.l r8, @-r15
-        /* 0x0000100A 0xD002 */ mov.l @(0x00A, pc), r0
-        /* 0x0000100C 0x9104 */ mov.w @(0x00C, pc), r1
+        /* 0x0000100A 0xD002 */ mov.l @(dat_00001014-., pc), r0
+        /* 0x0000100C 0x9104 */ mov.w @(dat_00001018-., pc), r1
         /* 0x0000100E 0x000B */ rts
         /* 0x00001010 0x0009 */ nop
-        /* 0x00001012 */ .word 0x0009
-        /* 0x00001014 */ .word 0xDEAD
-        /* 0x00001016 */ .word 0xBEEF
-        /* 0x00001018 */ .word 0xFACE
-        /* 0x0000101A */ .word 0x0009
+        /* 0x00001012 0x0009 */ nop
+        dat_00001014: /* source: 0000100A */
+        /* 00001014 */ .long 0xDEADBEEF
+        dat_00001018: /* source: 0000100C */
+        .word 0xFACE
+        /* 0x0000101A 0x0009 */ nop
         "#;
 
         test_base_mov_l(expected.to_string(), 0x1000);
@@ -1899,6 +2102,22 @@ mod tests {
         sh2_disasm(
             0x7a,
             0x0e15,
+            true,
+            &mut string,
+            &mut data_labels,
+            &mut branch_labels,
+        );
+        assert_eq!(string, "mov.w r1, @(r0, r14)");
+    }
+
+    #[test]
+    fn test_6143() {
+        let mut string = String::new();
+        let mut data_labels = HashMap::<u32, DataLabel>::new();
+        let mut branch_labels = HashMap::<u32, String>::new();
+        sh2_disasm(
+            0x7a,
+            0x6143,
             true,
             &mut string,
             &mut data_labels,
