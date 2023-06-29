@@ -5,7 +5,12 @@ use serde_yaml;
 use std::collections::BTreeMap;
 use std::collections::HashMap;
 use std::fs::File;
-use std::io::{self, Read};
+use std::io::{self, Read, BufRead};
+use std::path::Path;
+use regex::Regex;
+use std::collections::HashSet;
+use std::io::BufReader;
+
 struct DataLabel {
     size: u32,
     label: String,
@@ -87,7 +92,7 @@ fn match_nd8_f(
                     // string.push_str(&format!("bra {}", value));
 
                     string.push_str(&format!(
-                        "mov.w @({}-., pc), r{}",
+                        "mov.w @({}, pc), r{}",
                         value.label,
                         (op >> 8) & 0xf
                     ));
@@ -130,7 +135,7 @@ fn match_nd8_f(
                         // string.push_str(&format!("bra {}", value));
 
                         string.push_str(&format!(
-                            "mov.l @({}-., pc), r{}",
+                            "mov.l @({}, pc), r{}",
                             value.label,
                             (op >> 8) & 0xf
                         ));
@@ -163,7 +168,7 @@ fn match_nd8_f(
                             // string.push_str(&format!("bra {}", value));
 
                             string.push_str(&format!(
-                                "mov.l @({}-., pc), r{}",
+                                "mov.l @({}, pc), r{}",
                                 value.label,
                                 (op >> 8) & 0xf
                             ));
@@ -445,7 +450,7 @@ fn match_ff00(
         0x8500 => {
             if (op & 0x100) == 0x100 {
                 string.push_str(&format!(
-                    "mov.b @(0x{:03X}, r{}), r0",
+                    "mov.w @(0x{:03X}, r{}), r0",
                     (op & 0xf) * 2,
                     (op >> 4) & 0xf
                 ))
@@ -1227,12 +1232,12 @@ fn handle_code_section(
         let ii = i as usize;
         let instr: u32 = ((file_contents[ii] as u32) << 8) | file_contents[ii + 1] as u32;
 
-        // let (is_in_func, start_address) = infunc(i as u32, &ranges);
+        let (is_in_func, start_address) = infunc(i as u32, &ranges);
 
 
         // // the last function needs to emit data up until the next section
 
-        let (is_in_func, start_address) = infunc_extended(i as u32, &ranges);
+        let (is_in_func_extended, start_address_extended) = infunc_extended(i as u32, &ranges);
         println!("is_in_func {} start_address {:08X}", is_in_func, start_address);
 
         // let (beyond_last_func, beyond_addr) = is_beyond_last_func(i as u32, &ranges);
@@ -1298,7 +1303,8 @@ fn handle_code_section(
 
         // // thinking we 
 
-        if let Some(func) = disassembled_funcs.get_mut(&(start_address as u32)) {
+        // check to emit data, use extended addr
+        if let Some(func) = disassembled_funcs.get_mut(&(start_address_extended as u32)) {
             if func.data {
                 func.text.push_str(&format!(
                     "/* 0x{:08X} */ .word 0x{:04X}\n",
@@ -1322,13 +1328,14 @@ fn handle_code_section(
 
         // println!("checking data labels {:08X}", virtual_addr);
 
+        // data labels, extended addr
         let mut should_continue: bool = false;
         check_data_labels(virtual_addr,
         &data_labels,
         & mut skip_next,
         & mut should_continue,
         & file_contents,
-        start_address,
+        start_address_extended,
         & mut disassembled_funcs,
         i as u32,
         instr as u16);
@@ -1339,22 +1346,39 @@ fn handle_code_section(
             continue;
         }
 
-        let mut string = String::new();
-        sh2_disasm(
-            i as u32 + virtual_base_addr as u32,
-            instr,
-            true,
-            &mut string,
-            &mut data_labels,
-            &mut branch_labels,
-        );
-        if let Some(func) = disassembled_funcs.get_mut(&(start_address as u32)) {
-            func.text.push_str(&format!(
-                "/* 0x{:08X} 0x{:04X} */ {}\n",
-                virtual_addr, instr, string
-            ));
-            monolithic.push_str(&format!("/* 0x{:08X} */ {}\n", i, string));
+        // only disasm if we are in a func
+
+        if is_in_func
+        {
+            let mut string = String::new();
+            sh2_disasm(
+                i as u32 + virtual_base_addr as u32,
+                instr,
+                true,
+                &mut string,
+                &mut data_labels,
+                &mut branch_labels,
+            );
+            if let Some(func) = disassembled_funcs.get_mut(&(start_address as u32)) {
+                func.text.push_str(&format!(
+                    "/* 0x{:08X} 0x{:04X} */ {}\n",
+                    virtual_addr, instr, string
+                ));
+                monolithic.push_str(&format!("/* 0x{:08X} */ {}\n", i, string));
+            }
         }
+        else {
+            if let Some(func) = disassembled_funcs.get_mut(&(start_address as u32)) {
+
+            // emit uncaught data
+            func.text.push_str(&format!(
+                "/* 0x{:08X} */ .word 0x{:04X}\n",
+                virtual_addr, instr
+            ));  
+        }          
+        }
+
+
     }
 
     return disassembled_funcs;
@@ -1413,7 +1437,21 @@ fn write_c_file(
     }
 }
 
-use std::path::Path;
+fn find_include_asm_in_c_file(filename: &str) -> io::Result<HashSet<String>> {
+    let file = File::open(filename)?;
+    let reader = BufReader::new(file);
+    let re = Regex::new(r#"INCLUDE_ASM(?:_NO_ALIGN)?\("(.*?)", (.*?), (.*?)\)"#).unwrap();
+    let mut result = HashSet::new();
+
+    for res in reader.lines() {
+        if let Some(caps) = re.captures(&res.unwrap().to_string()) {
+            let func_name = caps.get(3).unwrap().as_str().to_string();
+            result.insert(func_name);
+        }
+    }
+
+    Ok(result)
+}
 
 fn handle_segments(file_contents: &Vec<u8>, config: &Config) {
     let mut processed_sections = Vec::<ProcessedSection>::new();
@@ -1492,9 +1530,34 @@ fn handle_segments(file_contents: &Vec<u8>, config: &Config) {
         }
     }
 
+    let mut includes: Option<HashSet<String>> = None;
+
+    // determine first what has been decompiled
+    if let Some(segs) = &config.segments {
+        if !segs.is_empty() {
+            let segment_name = &segs[0].name;
+            let base_addr = &segs[0].vram;
+            let path = &config.options.src_path;
+            let c_filename = format!("{}/{}.c", path, segment_name);
+            if Path::new(&c_filename).exists() {
+
+                match find_include_asm_in_c_file(&c_filename) {
+                    Ok(set) => includes = Some(set),
+                    Err(err) => {
+                        eprintln!("Error reading the file: {}", err);
+                    }
+                }
+            }
+        }
+    }
+
     // all the segments are processed, emit files
 
     std::fs::create_dir_all(&config.options.asm_path).expect("Failed to create directories.");
+    std::fs::create_dir_all(&format!("{}/f_nonmat",config.options.asm_path)).expect("Failed to create directories.");
+    std::fs::create_dir_all(&format!("{}/f_match",config.options.asm_path)).expect("Failed to create directories.");
+    std::fs::create_dir_all(&format!("{}/data",config.options.asm_path)).expect("Failed to create directories.");
+
     std::fs::create_dir_all(&config.options.ld_scripts_path)
         .expect("Failed to create directories.");
     std::fs::create_dir_all(&config.options.syms_path).expect("Failed to create directories.");
@@ -1503,21 +1566,38 @@ fn handle_segments(file_contents: &Vec<u8>, config: &Config) {
         if !processed_section.is_code {
             emit_asm_file(
                 format!(
-                    "{}/d{:07X}.s",
+                    "{}/data/d{:07X}.s",
                     config.options.asm_path, processed_section.vaddr
                 ),
                 processed_section.data.clone(),
             );
         } else {
             for (_addr, df) in &processed_section.disassembled_funcs {
-                emit_asm_file(
-                    format!(
-                        "{}/f{:07X}.s",
-                        config.options.asm_path,
-                        df.addr + processed_section.vbase as u32
-                    ),
-                    df.text.clone(),
-                );
+                let func_name = format!("func_{:08X}", df.addr + processed_section.vbase as u32);
+                
+                if let Some(includes_set) = &includes {
+                    if includes_set.contains(&func_name) {
+                        // this has not been decompiled
+                        emit_asm_file(
+                            format!(
+                                "{}/f_nonmat/f{:07X}.s",
+                                config.options.asm_path,
+                                df.addr + processed_section.vbase as u32
+                            ),
+                            df.text.clone(),
+                        );
+                    } else {
+                        // has been decompiled
+                        emit_asm_file(
+                            format!(
+                                "{}/f_match/f{:07X}.s",
+                                config.options.asm_path,
+                                df.addr + processed_section.vbase as u32
+                            ),
+                            df.text.clone(),
+                        );
+                    }
+                }
             }
         }
     }
@@ -2108,6 +2188,38 @@ mod tests {
             &mut branch_labels,
         );
         assert_eq!(string, "mov.w r1, @(r0, r14)");
+    }
+
+    #[test]
+    fn test_8450() {
+        let mut string = String::new();
+        let mut data_labels = HashMap::<u32, DataLabel>::new();
+        let mut branch_labels = HashMap::<u32, String>::new();
+        sh2_disasm(
+            0x7a,
+            0x8450,
+            true,
+            &mut string,
+            &mut data_labels,
+            &mut branch_labels,
+        );
+        assert_eq!(string, "mov.b @(0x000, r5), r0");
+    }
+
+    #[test]
+    fn test_8550() {
+        let mut string = String::new();
+        let mut data_labels = HashMap::<u32, DataLabel>::new();
+        let mut branch_labels = HashMap::<u32, String>::new();
+        sh2_disasm(
+            0x7a,
+            0x8550,
+            true,
+            &mut string,
+            &mut data_labels,
+            &mut branch_labels,
+        );
+        assert_eq!(string, "mov.w @(0x000, r5), r0");
     }
 
     #[test]
