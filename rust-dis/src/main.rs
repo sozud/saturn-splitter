@@ -1,15 +1,15 @@
 // why is 14c0 made into data?
 
+use regex::Regex;
 use serde_derive::Deserialize;
 use serde_yaml;
 use std::collections::BTreeMap;
 use std::collections::HashMap;
-use std::fs::File;
-use std::io::{self, Read, BufRead};
-use std::path::Path;
-use regex::Regex;
 use std::collections::HashSet;
+use std::fs::File;
 use std::io::BufReader;
+use std::io::{self, BufRead, Read};
+use std::path::Path;
 
 struct DataLabel {
     size: u32,
@@ -78,11 +78,25 @@ fn match_nd8_f(
     match op & 0xf000 {
         0x9000 => {
             // "mov.w @(0x%03X, pc), r%d"
-            string.push_str(&format!(
-                "mov.w @(0x{:03X}, pc), r{}",
-                (op & 0xff) * 2 + 4,
-                (op >> 8) & 0xf
-            ));
+            let thing = (op & 0xff) * 2 + 4 + v_addr;
+
+            if data_labels.contains_key(&thing) {
+                if let Some(value) = data_labels.get(&thing) {
+                    // Use the label
+                    string.push_str(&format!(
+                        "mov.w @({}, pc), r{}",
+                        value.label,
+                        (op >> 8) & 0xf
+                    ));
+                }
+            } else {
+                // use an address
+                string.push_str(&format!(
+                    "mov.w @(0x{:03X}, pc), r{}",
+                    (op & 0xff) * 2 + 4,
+                    (op >> 8) & 0xf
+                ));
+            }
         }
         0xd000 => {
             // "mov.l @(0x%03X, pc), r%d"
@@ -97,17 +111,43 @@ fn match_nd8_f(
                 // subtract 2 from target_a
                 target_a -= 2;
 
-                string.push_str(&format!(
-                    "mov.l @(0x{:03X}, pc), r{}",
-                    target_a,
-                    (op >> 8) & 0xf
-                ));
+                let thing = test - 2;
+
+                if data_labels.contains_key(&thing) {
+                    if let Some(value) = data_labels.get(&thing) {
+                        // Use the label
+                        string.push_str(&format!(
+                            "mov.l @({}, pc), r{}",
+                            value.label,
+                            (op >> 8) & 0xf
+                        ));
+                    }
+                } else {
+                    // use an address
+                    string.push_str(&format!(
+                        "mov.l @(0x{:03X}, pc), r{}",
+                        target_a,
+                        (op >> 8) & 0xf
+                    ));
+                }
             } else {
-                string.push_str(&format!(
-                    "mov.l @(0x{:03X}, pc), r{}",
-                    target_a,
-                    (op >> 8) & 0xf
-                ));
+                if data_labels.contains_key(&test) {
+                    if let Some(value) = data_labels.get(&test) {
+                        // Use the label
+                        string.push_str(&format!(
+                            "mov.l @({}, pc), r{}",
+                            value.label,
+                            (op >> 8) & 0xf
+                        ));
+                    }
+                } else {
+                    // use an address
+                    string.push_str(&format!(
+                        "mov.l @(0x{:03X}, pc), r{}",
+                        target_a,
+                        (op >> 8) & 0xf
+                    ));
+                }
             }
         }
         _ => match_i_f(v_addr, op, mode, string, data_labels, branch_labels),
@@ -271,8 +311,6 @@ fn match_d_f(
                 }
             } else {
                 let addr = ((op & 0xff) * 2) + v_addr + 4;
-                // string.push_str(&format!("bt 0x{:08X}", addr));
-
                 if branch_labels.contains_key(&addr) {
                     if let Some(value) = branch_labels.get(&addr) {
                         // Use the label
@@ -289,8 +327,6 @@ fn match_d_f(
                 let addr = (((op & 0xff) + 0xffffff00).wrapping_mul(2))
                     .wrapping_add(v_addr)
                     .wrapping_add(4);
-                // string.push_str(&format!("bt.s 0x{:08X}", addr));
-
                 if branch_labels.contains_key(&addr) {
                     if let Some(value) = branch_labels.get(&addr) {
                         // Use the label
@@ -785,13 +821,23 @@ fn infunc_extended(i: u32, ranges: &Vec<FunctionRange>) -> (bool, u32) {
         }
     }
 
-    // check after funcs
-    for j in 0..ranges.len() - 1 {
-        let current_func = &ranges[j];
-        let next_func = &ranges[j + 1];
-        if i >= current_func.phys_start && i < next_func.phys_start {
-            // in func rodata
-            return (true, current_func.phys_start);
+    if ranges.len() > 0 {
+        // check after funcs
+        for j in 0..ranges.len() - 1 {
+            let current_func = &ranges[j];
+            let next_func = &ranges[j + 1];
+            if i >= current_func.phys_start && i < next_func.phys_start {
+                // in func rodata
+                return (true, current_func.phys_start);
+            }
+        }
+    }
+
+    if ranges.len() > 0 {
+        // if this is the last func go to end
+        let last_func = &ranges[ranges.len() - 1];
+        if i >= last_func.phys_start {
+            return (true, last_func.phys_start);
         }
     }
 
@@ -870,7 +916,6 @@ fn find_data_labels(v_addr: u32, op: u32, data_labels: &mut HashMap<u32, DataLab
     if data_labels.contains_key(&(v_addr - 2).try_into().unwrap()) {
         if let Some(value) = data_labels.get(&(v_addr - 2).try_into().unwrap()) {
             if value.size == 4 {
-                // println!("skipping {:08X}", v_addr);
                 return;
             }
         }
@@ -878,6 +923,7 @@ fn find_data_labels(v_addr: u32, op: u32, data_labels: &mut HashMap<u32, DataLab
 
     if (op & 0xf000) == 0x9000 {
         let addr = (op & 0xff) * 2 + 4 + v_addr;
+        println!("Adding w {:08X}", addr);
         add_data_label(v_addr, addr, 2, data_labels);
     } else if (op & 0xf000) == 0xd000 {
         let target = ((op & 0xff) * 4 + 4 + v_addr) & 0xfffffffc;
@@ -896,6 +942,7 @@ fn find_data_labels(v_addr: u32, op: u32, data_labels: &mut HashMap<u32, DataLab
             println!("problem {:08X}", v_addr);
             return;
         }
+        println!("Adding l {:08X}", target);
         add_data_label(v_addr, target, 4, data_labels);
     }
 }
@@ -984,6 +1031,51 @@ struct DisassembledFunc {
     file: String,
 }
 
+fn check_data_labels(
+    virtual_addr: u32,
+    data_labels: &HashMap<u32, DataLabel>,
+    skip_next: &mut bool,
+    should_continue: &mut bool,
+    file_contents: &Vec<u8>,
+    start_address: u32,
+    disassembled_funcs: &mut BTreeMap<u32, DisassembledFunc>,
+    i: u32,
+    instr: u16,
+) {
+    if data_labels.contains_key(&virtual_addr.try_into().unwrap()) {
+        if let Some(value) = data_labels.get(&virtual_addr.try_into().unwrap()) {
+            // Use the label
+
+            if let Some(func) = disassembled_funcs.get_mut(&(start_address as u32)) {
+                func.text.push_str(&format!(
+                    "{}: /* source: {:08X} */\n",
+                    value.label, value.source
+                ));
+            }
+            if value.size == 2 {
+                if let Some(func) = disassembled_funcs.get_mut(&(start_address as u32)) {
+                    func.text.push_str(&format!(".word 0x{:04X}\n", instr));
+                }
+            } else if value.size == 4 {
+                let data = ((file_contents[i as usize + 0] as u32) << 24)
+                    | ((file_contents[i as usize + 1] as u32) << 16)
+                    | ((file_contents[i as usize + 2] as u32) << 8)
+                    | ((file_contents[i as usize + 3] as u32) << 0);
+                if let Some(func) = disassembled_funcs.get_mut(&(start_address as u32)) {
+                    func.text.push_str(&format!(
+                        "/* {:08X} */ .long 0x{:08X}\n",
+                        virtual_addr, data
+                    ));
+                }
+
+                // skip next instruction since we used it
+                *skip_next = true;
+            }
+            *should_continue = true;
+        }
+    }
+}
+
 fn handle_code_section(
     file_contents: &Vec<u8>,
     section_start: u64,
@@ -1046,68 +1138,35 @@ fn handle_code_section(
     let mut skip_next = false;
 
     for i in (section_start..section_end).step_by(2) {
+        let ii = i as usize;
+        let instr: u32 = ((file_contents[ii] as u32) << 8) | file_contents[ii + 1] as u32;
         let virtual_addr = TryInto::<u32>::try_into(i).unwrap() + virtual_base_addr as u32;
         if skip_next {
             skip_next = false;
             continue;
         }
 
-        let ii = i as usize;
-        let instr: u32 = ((file_contents[ii] as u32) << 8) | file_contents[ii + 1] as u32;
-
         let (is_in_func, start_address) = infunc(i as u32, &ranges);
 
-        // the last function needs to emit data up until the next section
-
+        // // the last function needs to emit data up until the next section
         let (is_in_func_extended, start_address_extended) = infunc_extended(i as u32, &ranges);
 
-        let (beyond_last_func, beyond_addr) = is_beyond_last_func(i as u32, &ranges);
-
-        if beyond_last_func {
-            if let Some(func) = disassembled_funcs.get_mut(&(beyond_addr as u32)) {
-                func.text.push_str(&format!(
-                    "/* 0x{:08X} */ .word 0x{:04X}\n",
-                    virtual_addr, instr
-                ));
-            }
-
-            if ii as u64 >= section_end - 2 {
-                break;
-            }
-            continue;
-        }
-
-        if !is_in_func && is_in_func_extended {
-            // data after function, emit for individual files
-            monolithic.push_str(&format!("/* 0x{:08X} */ .word 0x{:04X}\n", i, instr));
-
-            if let Some(func) = disassembled_funcs.get_mut(&(start_address_extended as u32)) {
-                func.text.push_str(&format!(
-                    "/* 0x{:08X} */ .word 0x{:04X}\n",
-                    virtual_addr, instr
-                ));
+        if i as u32 == start_address {
+            if let Some(func) = disassembled_funcs.get_mut(&(start_address as u32)) {
+                func.text
+                    .push_str(&format!("glabel func_{:08X}\n", virtual_addr));
             }
         }
 
-        if !is_in_func {
-            monolithic.push_str(&format!("/* 0x{:08X} */ .word 0x{:04X}\n", i, instr));
-            continue;
-        } else {
-            // if this is the first instruction emit the function label
-            if i as u32 == start_address {
-                if let Some(func) = disassembled_funcs.get_mut(&(start_address as u32)) {
-                    func.text
-                        .push_str(&format!("glabel func_{:08X}\n", virtual_addr));
-                }
-            }
-        }
-
-        if let Some(func) = disassembled_funcs.get_mut(&(start_address as u32)) {
+        // check to emit data, use extended addr
+        if let Some(func) = disassembled_funcs.get_mut(&(start_address_extended as u32)) {
             if func.data {
                 func.text.push_str(&format!(
                     "/* 0x{:08X} */ .word 0x{:04X}\n",
                     virtual_addr, instr
                 ));
+                println!("\ti is {:08X} func.data continue", i);
+
                 continue;
             }
         }
@@ -1122,55 +1181,49 @@ fn handle_code_section(
             }
         }
 
-        if data_labels.contains_key(&virtual_addr.try_into().unwrap()) {
-            if let Some(value) = data_labels.get(&virtual_addr.try_into().unwrap()) {
-                // Use the label
-                if let Some(func) = disassembled_funcs.get_mut(&(start_address as u32)) {
-                    func.text.push_str(&format!(
-                        "{}: /* source: {:08X} */\n",
-                        value.label, value.source
-                    ));
-                    monolithic.push_str(&format!("{}:\n", value.label));
-                }
-                if value.size == 2 {
-                    if let Some(func) = disassembled_funcs.get_mut(&(start_address as u32)) {
-                        func.text.push_str(&format!(".word 0x{:04X}\n", instr));
-                        monolithic.push_str(&format!(".word 0x{:04X}\n", instr));
-                    }
-                } else if value.size == 4 {
-                    let data = ((file_contents[i as usize + 0] as u32) << 24)
-                        | ((file_contents[i as usize + 1] as u32) << 16)
-                        | ((file_contents[i as usize + 2] as u32) << 8)
-                        | ((file_contents[i as usize + 3] as u32) << 0);
-                    if let Some(func) = disassembled_funcs.get_mut(&(start_address as u32)) {
-                        func.text.push_str(&format!(
-                            "/* {:08X} */ .long 0x{:08X}\n",
-                            virtual_addr, data
-                        ));
-                        monolithic.push_str(&format!("/* {:08X} */ .long 0x{:08X}\n", i, data));
-                    }
-
-                    // skip next instruction since we used it
-                    skip_next = true;
-                }
-                continue;
-            }
-        }
-        let mut string = String::new();
-        sh2_disasm(
-            i as u32 + virtual_base_addr as u32,
-            instr,
-            true,
-            &mut string,
-            &mut data_labels,
-            &mut branch_labels,
+        // data labels, extended addr
+        let mut should_continue: bool = false;
+        check_data_labels(
+            virtual_addr,
+            &data_labels,
+            &mut skip_next,
+            &mut should_continue,
+            &file_contents,
+            start_address_extended,
+            &mut disassembled_funcs,
+            i as u32,
+            instr as u16,
         );
-        if let Some(func) = disassembled_funcs.get_mut(&(start_address as u32)) {
-            func.text.push_str(&format!(
-                "/* 0x{:08X} 0x{:04X} */ {}\n",
-                virtual_addr, instr, string
-            ));
-            monolithic.push_str(&format!("/* 0x{:08X} */ {}\n", i, string));
+
+        if should_continue {
+            continue;
+        }
+
+        // only disasm if we are in a func
+        if is_in_func {
+            let mut string = String::new();
+            sh2_disasm(
+                i as u32 + virtual_base_addr as u32,
+                instr,
+                true,
+                &mut string,
+                &mut data_labels,
+                &mut branch_labels,
+            );
+            if let Some(func) = disassembled_funcs.get_mut(&(start_address as u32)) {
+                func.text.push_str(&format!(
+                    "/* 0x{:08X} 0x{:04X} */ {}\n",
+                    virtual_addr, instr, string
+                ));
+            }
+        } else {
+            if let Some(func) = disassembled_funcs.get_mut(&(start_address_extended as u32)) {
+                // emit uncaught data
+                func.text.push_str(&format!(
+                    "/* 0x{:08X} */ .word 0x{:04X}\n",
+                    virtual_addr, instr
+                ));
+            }
         }
     }
 
@@ -1333,7 +1386,6 @@ fn handle_segments(file_contents: &Vec<u8>, config: &Config) {
             let path = &config.options.src_path;
             let c_filename = format!("{}/{}.c", path, segment_name);
             if Path::new(&c_filename).exists() {
-
                 match find_include_asm_in_c_file(&c_filename) {
                     Ok(set) => includes = Some(set),
                     Err(err) => {
@@ -1347,9 +1399,12 @@ fn handle_segments(file_contents: &Vec<u8>, config: &Config) {
     // all the segments are processed, emit files
 
     std::fs::create_dir_all(&config.options.asm_path).expect("Failed to create directories.");
-    std::fs::create_dir_all(&format!("{}/f_nonmat",config.options.asm_path)).expect("Failed to create directories.");
-    std::fs::create_dir_all(&format!("{}/f_match",config.options.asm_path)).expect("Failed to create directories.");
-    std::fs::create_dir_all(&format!("{}/data",config.options.asm_path)).expect("Failed to create directories.");
+    std::fs::create_dir_all(&format!("{}/f_nonmat", config.options.asm_path))
+        .expect("Failed to create directories.");
+    std::fs::create_dir_all(&format!("{}/f_match", config.options.asm_path))
+        .expect("Failed to create directories.");
+    std::fs::create_dir_all(&format!("{}/data", config.options.asm_path))
+        .expect("Failed to create directories.");
 
     std::fs::create_dir_all(&config.options.ld_scripts_path)
         .expect("Failed to create directories.");
@@ -1367,7 +1422,7 @@ fn handle_segments(file_contents: &Vec<u8>, config: &Config) {
         } else {
             for (_addr, df) in &processed_section.disassembled_funcs {
                 let func_name = format!("func_{:08X}", df.addr + processed_section.vbase as u32);
-                
+
                 if let Some(includes_set) = &includes {
                     if includes_set.contains(&func_name) {
                         // this has not been decompiled
@@ -1458,17 +1513,15 @@ fn main() {
     let args: Vec<String> = env::args().collect();
 
     if let Some(filename) = args.get(1) {
-
-        if filename == "--find-funcs"
-        {
+        if filename == "--find-funcs" {
             if let Some(funcs_filename) = args.get(2) {
                 match read_file_to_vec(&funcs_filename) {
                     Ok(file_contents) => {
                         let mut ranges = Vec::<FunctionRange>::new();
                         find_funcs(&file_contents, 0, file_contents.len() as u64, &mut ranges);
-                        for range in ranges
-                        {
-                            println!("{:08X}-{:08X}", range.phys_start, range.phys_end);
+                        for range in ranges {
+                            // println!("{:08X}-{:08X}", range.phys_start, range.phys_end);
+                            println!("0x{:08X},", range.phys_start + 0x06066000);
                         }
                     }
                     Err(error) => {
@@ -1692,19 +1745,31 @@ mod tests {
     fn check_mov_l_pc_0() {
         // TODO mov.w/mov.l should emit a label in addition to labeling as
         // data
+        // let expected = r#"glabel func_00000008
+        // /* 0x00000008 0x2F86 */ mov.l r8, @-r15
+        // /* 0x0000000A 0xD002 */ mov.l @(0x00A, pc), r0
+        // /* 0x0000000C 0x9104 */ mov.w @(0x00C, pc), r1
+        // /* 0x0000000E 0x000B */ rts
+        // /* 0x00000010 0x0009 */ nop
+        // /* 0x00000012 */ .word 0x0009
+        // /* 0x00000014 */ .word 0xDEAD
+        // /* 0x00000016 */ .word 0xBEEF
+        // /* 0x00000018 */ .word 0xFACE
+        // /* 0x0000001A */ .word 0x0009
+        // "#;
         let expected = r#"glabel func_00000008
-        /* 0x00000008 0x2F86 */ mov.l r8, @-r15
-        /* 0x0000000A 0xD002 */ mov.l @(0x00A, pc), r0
-        /* 0x0000000C 0x9104 */ mov.w @(0x00C, pc), r1
-        /* 0x0000000E 0x000B */ rts
-        /* 0x00000010 0x0009 */ nop
-        /* 0x00000012 */ .word 0x0009
-        /* 0x00000014 */ .word 0xDEAD
-        /* 0x00000016 */ .word 0xBEEF
-        /* 0x00000018 */ .word 0xFACE
-        /* 0x0000001A */ .word 0x0009
-        "#;
-
+                        /* 0x00000008 0x2F86 */ mov.l r8, @-r15
+                        /* 0x0000000A 0xD002 */ mov.l @(dat_00000014, pc), r0
+                        /* 0x0000000C 0x9104 */ mov.w @(dat_00000018, pc), r1
+                        /* 0x0000000E 0x000B */ rts
+                        /* 0x00000010 0x0009 */ nop
+                        /* 0x00000012 */ .word 0x0009
+                        dat_00000014: /* source: 0000000A */
+                        /* 00000014 */ .long 0xDEADBEEF
+                        dat_00000018: /* source: 0000000C */
+                        .word 0xFACE
+                        /* 0x0000001A */ .word 0x0009
+                        "#;
         test_base_mov_l(expected.to_string(), 0);
     }
 
@@ -1714,14 +1779,15 @@ mod tests {
         // data
         let expected = r#"glabel func_00001008
         /* 0x00001008 0x2F86 */ mov.l r8, @-r15
-        /* 0x0000100A 0xD002 */ mov.l @(0x00A, pc), r0
-        /* 0x0000100C 0x9104 */ mov.w @(0x00C, pc), r1
+        /* 0x0000100A 0xD002 */ mov.l @(dat_00001014, pc), r0
+        /* 0x0000100C 0x9104 */ mov.w @(dat_00001018, pc), r1
         /* 0x0000100E 0x000B */ rts
         /* 0x00001010 0x0009 */ nop
         /* 0x00001012 */ .word 0x0009
-        /* 0x00001014 */ .word 0xDEAD
-        /* 0x00001016 */ .word 0xBEEF
-        /* 0x00001018 */ .word 0xFACE
+        dat_00001014: /* source: 0000100A */
+        /* 00001014 */ .long 0xDEADBEEF
+        dat_00001018: /* source: 0000100C */
+        .word 0xFACE
         /* 0x0000101A */ .word 0x0009
         "#;
 
@@ -1776,69 +1842,6 @@ mod tests {
         "#;
         test_base(expected.to_string(), 0x1000);
     }
-    // #[test]
-    // fn test_infunc() {
-    //     let ranges = vec![
-    //         FunctionRange {
-    //             phys_start: 100,
-    //             phys_end: 200,
-    //         },
-    //         FunctionRange {
-    //             phys_start: 300,
-    //             phys_end: 400,
-    //         },
-    //         FunctionRange {
-    //             phys_start: 500,
-    //             phys_end: 600,
-    //         },
-    //     ];
-
-    //     // Test with values inside the ranges
-    //     assert_eq!(infunc(150, &ranges), (true, 100));
-    //     assert_eq!(infunc(350, &ranges), (true, 300));
-    //     assert_eq!(infunc(550, &ranges), (true, 500));
-
-    //     // Test with values outside the ranges
-    //     assert_eq!(infunc(50, &ranges), (false, 0));
-    //     assert_eq!(infunc(250, &ranges), (false, 0));
-    //     assert_eq!(infunc(700, &ranges), (false, 0));
-    // }
-
-    // #[test]
-    // fn test_infunc_extended() {
-    //     // if we are inbetween functions, include the rodata
-
-    //     let ranges = vec![
-    //         FunctionRange {
-    //             phys_start: 100,
-    //             phys_end: 200,
-    //         },
-    //         FunctionRange {
-    //             phys_start: 300,
-    //             phys_end: 400,
-    //         },
-    //         FunctionRange {
-    //             phys_start: 500,
-    //             phys_end: 600,
-    //         },
-    //     ];
-
-    //     //0-99 hasm
-    //     //100-200 func1
-    //     //201-299 func1 data (include with func1)
-    //     //300-400 func2
-    //     //401-499 func2 data
-    //     //500-600 func3
-
-    //     // Test with values inside the ranges
-    //     assert_eq!(infunc_extended(150, &ranges), (true, 100));
-    //     assert_eq!(infunc_extended(350, &ranges), (true, 300));
-    //     assert_eq!(infunc_extended(550, &ranges), (true, 500));
-
-    //     // Test with values outside the ranges
-    //     assert_eq!(infunc_extended(50, &ranges), (false, 0)); //hasm range, no
-    //     assert_eq!(infunc_extended(250, &ranges), (true, 100)); //func1 data
-    // }
 
     #[test]
     fn test_sts_l() {
@@ -1998,5 +2001,21 @@ mod tests {
             &mut branch_labels,
         );
         assert_eq!(string, "mov.w @(0x000, r5), r0");
+    }
+
+    #[test]
+    fn test_6143() {
+        let mut string = String::new();
+        let mut data_labels = HashMap::<u32, DataLabel>::new();
+        let mut branch_labels = HashMap::<u32, String>::new();
+        sh2_disasm(
+            0x7a,
+            0x6143,
+            true,
+            &mut string,
+            &mut data_labels,
+            &mut branch_labels,
+        );
+        assert_eq!(string, "mov.w r1, @(r0, r14)");
     }
 }
