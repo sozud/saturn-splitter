@@ -923,7 +923,6 @@ fn find_data_labels(v_addr: u32, op: u32, data_labels: &mut HashMap<u32, DataLab
 
     if (op & 0xf000) == 0x9000 {
         let addr = (op & 0xff) * 2 + 4 + v_addr;
-        println!("Adding w {:08X}", addr);
         add_data_label(v_addr, addr, 2, data_labels);
     } else if (op & 0xf000) == 0xd000 {
         let target = ((op & 0xff) * 4 + 4 + v_addr) & 0xfffffffc;
@@ -942,7 +941,6 @@ fn find_data_labels(v_addr: u32, op: u32, data_labels: &mut HashMap<u32, DataLab
             println!("problem {:08X}", v_addr);
             return;
         }
-        println!("Adding l {:08X}", target);
         add_data_label(v_addr, target, 4, data_labels);
     }
 }
