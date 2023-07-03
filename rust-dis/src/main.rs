@@ -582,13 +582,13 @@ fn match_f00f(
         )),
         0x000f => string.push_str(&format!(
             "mac.l @r{}+, @r{}+",
+            (op >> 4) & 0xf,
             (op >> 8) & 0xf,
-            (op >> 4) & 0xf
         )),
         0x400f => string.push_str(&format!(
             "mac.w @r{}+, @r{}+",
+            (op >> 4) & 0xf,
             (op >> 8) & 0xf,
-            (op >> 4) & 0xf
         )),
         0x6004 => string.push_str(&format!(
             "mov.b @r{}+, r{}",
@@ -2015,5 +2015,21 @@ mod tests {
             &mut branch_labels,
         );
         assert_eq!(string, "mov.w r1, @(r0, r14)");
+    }
+
+    #[test]
+    fn test_01ff() {
+        let mut string = String::new();
+        let mut data_labels = HashMap::<u32, DataLabel>::new();
+        let mut branch_labels = HashMap::<u32, String>::new();
+        sh2_disasm(
+            0x7a,
+            0x01ff,
+            true,
+            &mut string,
+            &mut data_labels,
+            &mut branch_labels,
+        );
+        assert_eq!(string, "mac.l @r15+, @r1+");
     }
 }
