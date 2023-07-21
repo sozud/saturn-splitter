@@ -1415,8 +1415,6 @@ fn handle_segments(file_contents: &Vec<u8>, config: &Config) {
 
             }
         }
-
-        // println!("{:#?}", includes);
     }
 
     // all the segments are processed, emit files
@@ -1496,7 +1494,7 @@ fn handle_segments(file_contents: &Vec<u8>, config: &Config) {
                 // write linker script
                 let filename = format!("{}/{}.ld", &config.options.ld_scripts_path, segment_name);
 
-                if Path::new(&config.options.ld_scripts_path).exists() {
+                if Path::new(&filename).exists() {
                     println!("Linker file exists, skipping");
                 } else {
                     let mut linker_file = std::fs::File::create(filename)
