@@ -1374,7 +1374,7 @@ fn handle_segments(file_contents: &Vec<u8>, config: &Config) {
         }
     }
 
-    let mut includes: Option<HashSet<String>> = None;
+    let mut includes: HashSet<String> = HashSet::new();
 
     // determine first what has been decompiled
     if let Some(segs) = &config.segments {
@@ -1382,16 +1382,41 @@ fn handle_segments(file_contents: &Vec<u8>, config: &Config) {
             let segment_name = &segs[0].name;
             let base_addr = &segs[0].vram;
             let path = &config.options.src_path;
-            let c_filename = format!("{}/{}.c", path, segment_name);
-            if Path::new(&c_filename).exists() {
-                match find_include_asm_in_c_file(&c_filename) {
-                    Ok(set) => includes = Some(set),
-                    Err(err) => {
-                        eprintln!("Error reading the file: {}", err);
+            for seg in segs
+            {
+                if let Some(subsegments) = &seg.subsegments 
+                {
+                    for subseg in subsegments
+                    {
+                        println!("seg {:#?}", subseg);
+                        // // need to check the designated file rather than just the segment
+                        // // collect all c files specified in the yaml, then check all of those
+                        // // and add to includes
+    
+                        if let Some(subseg_file) = &subseg.file
+                        {
+                            let c_filename = format!("{}/{}.c", path, subseg_file);
+    
+                            println!("checking {}", c_filename);
+                            if Path::new(&c_filename).exists() {
+                                match find_include_asm_in_c_file(&c_filename) {
+                                    Ok(set) => {
+                                        println!("adding {:#?}", set);
+                                        includes.extend(set)
+                                    },
+                                    Err(err) => {
+                                        eprintln!("Error reading the file: {}", err);
+                                    }
+                                }
+                            }
+                        }
                     }
                 }
+
             }
         }
+
+        // println!("{:#?}", includes);
     }
 
     // all the segments are processed, emit files
@@ -1421,28 +1446,26 @@ fn handle_segments(file_contents: &Vec<u8>, config: &Config) {
             for (_addr, df) in &processed_section.disassembled_funcs {
                 let func_name = format!("func_{:08X}", df.addr + processed_section.vbase as u32);
 
-                if let Some(includes_set) = &includes {
-                    if includes_set.contains(&func_name) {
-                        // this has not been decompiled
-                        emit_asm_file(
-                            format!(
-                                "{}/f_nonmat/f{:07X}.s",
-                                config.options.asm_path,
-                                df.addr + processed_section.vbase as u32
-                            ),
-                            df.text.clone(),
-                        );
-                    } else {
-                        // has been decompiled
-                        emit_asm_file(
-                            format!(
-                                "{}/f_match/f{:07X}.s",
-                                config.options.asm_path,
-                                df.addr + processed_section.vbase as u32
-                            ),
-                            df.text.clone(),
-                        );
-                    }
+                if includes.contains(&func_name) {
+                    // this has not been decompiled
+                    emit_asm_file(
+                        format!(
+                            "{}/f_nonmat/f{:07X}.s",
+                            config.options.asm_path,
+                            df.addr + processed_section.vbase as u32
+                        ),
+                        df.text.clone(),
+                    );
+                } else {
+                    // has been decompiled
+                    emit_asm_file(
+                        format!(
+                            "{}/f_match/f{:07X}.s",
+                            config.options.asm_path,
+                            df.addr + processed_section.vbase as u32
+                        ),
+                        df.text.clone(),
+                    );
                 }
             }
         }
