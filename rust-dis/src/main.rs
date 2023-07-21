@@ -1472,11 +1472,16 @@ fn handle_segments(file_contents: &Vec<u8>, config: &Config) {
             {
                 // write linker script
                 let filename = format!("{}/{}.ld", &config.options.ld_scripts_path, segment_name);
-                let mut linker_file =
-                    std::fs::File::create(filename).expect("Failed to create linker script file.");
-                let linker_script = gen_ld_script(segment_name, &format!("{:08X}", base_addr));
-                writeln!(&mut linker_file, "{}", linker_script)
-                    .expect("Failed to write to linker script file.");
+
+                if Path::new(&config.options.ld_scripts_path).exists() {
+                    println!("Linker file exists, skipping");
+                } else {
+                    let mut linker_file = std::fs::File::create(filename)
+                        .expect("Failed to create linker script file.");
+                    let linker_script = gen_ld_script(segment_name, &format!("{:08X}", base_addr));
+                    writeln!(&mut linker_file, "{}", linker_script)
+                        .expect("Failed to write to linker script file.");
+                }
             }
 
             // write symbols
