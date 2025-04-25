@@ -958,7 +958,7 @@ struct Options {
 #[derive(Debug, Deserialize)]
 struct Subsegment {
     start: u64,
-    end: u64,
+    end: Option<u64>,
     #[serde(rename = "type")]
     segment_type: Option<String>,
     file: Option<String>,
@@ -989,9 +989,19 @@ fn parse_yaml2(filename: String) -> Config {
         .expect("Failed to read the file.");
 
     // Parse the YAML into a Config struct
-    let config: Config = serde_yaml::from_str(&contents).expect("Failed to parse YAML.");
-
-    return config;
+    let mut config: Config = serde_yaml::from_str(&contents).expect("Failed to parse YAML.");
+    if let Some(ref mut segments) = config.segments {
+        for segment in segments {
+            if let Some(ref mut subsegments) = segment.subsegments {
+                for i in 0..subsegments.len().saturating_sub(1) {
+                    if subsegments[i].end.is_none() {
+                        subsegments[i].end = Option::from(subsegments[i + 1].start - 1)
+                    }
+                }
+            }
+        }
+    }
+    config
 }
 use std::io::Write;
 
@@ -1320,7 +1330,7 @@ fn handle_segments(file_contents: &Vec<u8>, config: &Config) {
                         .clone();
 
                     let subsegment_start = subsegment.start;
-                    let subsegment_end = subsegment.end;
+                    let subsegment_end = subsegment.end.unwrap_or(file_contents.len() as u64);
 
                     println!(
                         "subsegment {:08X}-{:08X} {} {}",
