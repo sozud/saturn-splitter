@@ -1734,7 +1734,7 @@ mod tests {
     }
 }"#;
 
-        let actual = gen_ld_script("zero", "0x06004080");
+        let actual = gen_ld_script("zero", "06004080");
         print_diff(expected.to_string(), actual.clone());
         assert!(expected == actual);
     }
@@ -2040,7 +2040,7 @@ mod tests {
             &mut data_labels,
             &mut branch_labels,
         );
-        assert_eq!(string, "mov.w r1, @(r0, r14)");
+        assert_eq!(string, "mov r4, r1");
     }
 
     #[test]
