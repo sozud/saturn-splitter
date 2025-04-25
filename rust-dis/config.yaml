@@ -6,6 +6,9 @@ options:
   target_path:  ../T_BAT.PRG
   asm_path:     output/funcs
   asset_path:   assets/servant/tt_000
+  ld_scripts_path: ld_scripts
+  syms_path: syms_path
+  decomp_empty_funcs: true
   src_path:     output
   compiler:     GCC
   symbol_addrs_path:    config/generated.symbols.us.tt_000.txt
