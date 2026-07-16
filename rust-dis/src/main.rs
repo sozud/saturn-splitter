@@ -15,6 +15,7 @@ struct DataLabel {
     size: u32,
     label: String,
     source: u32,
+    is_function: bool,
 }
 
 struct JumpTableEntry {
@@ -1012,6 +1013,7 @@ fn add_data_label(source: u32, addr: u32, size: u32, data_labels: &mut HashMap<u
         size,
         label: the_label,
         source: source,
+        is_function: false,
     };
     data_labels.insert(addr, data_label);
 }
@@ -1096,6 +1098,34 @@ fn find_data_labels(v_addr: u32, op: u32, data_labels: &mut HashMap<u32, DataLab
     }
 }
 
+fn literal_feeds_call(
+    file_contents: &Vec<u8>,
+    source: u32,
+    virtual_base_addr: u64,
+) -> bool {
+    let Some(source_offset) = source.checked_sub(virtual_base_addr as u32) else {
+        return false;
+    };
+    let source_offset = source_offset as usize;
+    if source_offset + 1 >= file_contents.len() {
+        return false;
+    }
+    let load = ((file_contents[source_offset] as u32) << 8)
+        | file_contents[source_offset + 1] as u32;
+    if load & 0xf000 != 0xd000 {
+        return false;
+    }
+    let register = (load >> 8) & 0xf;
+    let scan_end = (source_offset + 34).min(file_contents.len().saturating_sub(1));
+    for offset in ((source_offset + 2)..scan_end).step_by(2) {
+        let op = ((file_contents[offset] as u32) << 8) | file_contents[offset + 1] as u32;
+        if op & 0xf0ff == 0x400b && ((op >> 8) & 0xf) == register {
+            return true;
+        }
+    }
+    false
+}
+
 #[derive(Debug, Deserialize)]
 struct Options {
     target_path: String,
@@ -1154,6 +1184,43 @@ fn parse_yaml2(filename: String) -> Config {
     }
     config
 }
+
+fn read_user_symbols(filename: &str) -> HashMap<u32, String> {
+    let Ok(contents) = std::fs::read_to_string(filename) else {
+        return HashMap::new();
+    };
+    let pattern = Regex::new(
+        r"^\s*([A-Za-z_][A-Za-z0-9_]*)\s*=\s*(0x[0-9A-Fa-f]+)\s*;\s*$",
+    )
+    .unwrap();
+    let mut symbols = HashMap::new();
+    for line in contents.lines() {
+        let Some(captures) = pattern.captures(line) else {
+            continue;
+        };
+        let name = captures.get(1).unwrap().as_str();
+        let address = u32::from_str_radix(
+            captures.get(2).unwrap().as_str().trim_start_matches("0x"),
+            16,
+        )
+        .unwrap();
+        symbols.entry(address).or_insert_with(|| name.to_string());
+    }
+    symbols
+}
+
+fn format_literal(
+    value: u32,
+    user_symbols: &HashMap<u32, String>,
+    allow_symbol: bool,
+) -> String {
+    if allow_symbol {
+        if let Some(symbol) = user_symbols.get(&value) {
+            return symbol.clone();
+        }
+    }
+    format!("0x{:08X}", value)
+}
 use std::io::Write;
 
 fn emit_c_file(functions: &BTreeMap<u32, DisassembledFunc>, output_path: String) {
@@ -1200,6 +1267,7 @@ fn check_data_labels(
     disassembled_funcs: &mut BTreeMap<u32, DisassembledFunc>,
     i: u32,
     instr: u16,
+    user_symbols: &HashMap<u32, String>,
 ) {
     if data_labels.contains_key(&virtual_addr.try_into().unwrap()) {
         if let Some(value) = data_labels.get(&virtual_addr.try_into().unwrap()) {
@@ -1222,8 +1290,9 @@ fn check_data_labels(
                     | ((file_contents[i as usize + 3] as u32) << 0);
                 if let Some(func) = disassembled_funcs.get_mut(&(start_address as u32)) {
                     func.text.push_str(&format!(
-                        "/* {:08X} */ .long 0x{:08X}\n",
-                        virtual_addr, data
+                        "/* {:08X} */ .long {}\n",
+                        virtual_addr,
+                        format_literal(data, user_symbols, !value.is_function)
                     ));
                 }
 
@@ -1240,6 +1309,7 @@ fn handle_code_section(
     section_start: u64,
     section_end: u64,
     virtual_base_addr: u64,
+    user_symbols: &HashMap<u32, String>,
 ) -> (BTreeMap<u32, DisassembledFunc>) {
     let len = file_contents.len();
     let mut ranges = Vec::<FunctionRange>::new();
@@ -1286,6 +1356,12 @@ fn handle_code_section(
     }
 
     remove_jump_table_internal_labels(&mut branch_labels, &jump_table_entries);
+
+    for label in data_labels.values_mut() {
+        if label.size == 4 {
+            label.is_function = literal_feeds_call(file_contents, label.source, virtual_base_addr);
+        }
+    }
     let mut disassembled_funcs = BTreeMap::<u32, DisassembledFunc>::new();
 
     // create emtpy ones for all funcs
@@ -1374,6 +1450,7 @@ fn handle_code_section(
             &mut disassembled_funcs,
             i as u32,
             instr as u16,
+            user_symbols,
         );
 
         if should_continue {
@@ -1484,6 +1561,12 @@ fn handle_segments(file_contents: &Vec<u8>, config: &Config) {
     let mut processed_sections = Vec::<ProcessedSection>::new();
     if let Some(segments) = &config.segments {
         for segment in segments {
+            let user_symbols = read_user_symbols(
+                &format!(
+                    "{}/{}_user_syms.txt",
+                    config.options.syms_path, segment.name
+                ),
+            );
             println!("Segment Name: {}", segment.name);
             println!("Segment Type: {}", segment.segment_type);
             println!("Segment Start: {}", segment.start);
@@ -1540,6 +1623,7 @@ fn handle_segments(file_contents: &Vec<u8>, config: &Config) {
                             subsegment_start,
                             subsegment_end,
                             segment.vram,
+                            &user_symbols,
                         );
 
                         let processed_section = ProcessedSection {
@@ -1837,6 +1921,7 @@ fn asm_test_case(asm: String, expected: String, virtual_base_addr: u64) {
         0,
         output.len().try_into().unwrap(),
         virtual_base_addr,
+        &HashMap::new(),
     );
 
     let trimmed_right: String = expected
@@ -2376,5 +2461,24 @@ mod tests {
             &branch_labels,
         );
         assert_eq!(string, "mova lab_060A742C, r0");
+    }
+
+    #[test]
+    fn test_object_symbols_in_literal_pool() {
+        let mut symbols_file = NamedTempFile::new().unwrap();
+        writeln!(symbols_file, "_g_Entities = 0x060997F8;").unwrap();
+        writeln!(symbols_file, "_DestroyEntity = 0x0600FFB8;").unwrap();
+        let symbols = read_user_symbols(symbols_file.path().to_str().unwrap());
+        let call_sequence = vec![0xd100, 0x0009, 0x410b]
+            .into_iter()
+            .flat_map(|word: u16| word.to_be_bytes())
+            .collect::<Vec<_>>();
+
+        assert_eq!(format_literal(0x060997f8, &symbols, true), "_g_Entities");
+        assert!(literal_feeds_call(&call_sequence, 0, 0));
+        assert_eq!(
+            format_literal(0x0600ffb8, &symbols, false),
+            "0x0600FFB8"
+        );
     }
 }
