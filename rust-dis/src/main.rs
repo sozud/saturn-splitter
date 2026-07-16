@@ -770,35 +770,72 @@ fn find_funcs(
     section_end: u64,
     ranges: &mut Vec<FunctionRange>,
 ) {
+    let mut literal_halfwords = HashSet::<u32>::new();
+    for i in (section_start..section_end).step_by(2) {
+        let op = (vec[i as usize] as u32) << 8 | vec[i as usize + 1] as u32;
+        let (target, size) = if op & 0xf000 == 0x9000 {
+            (i as u32 + 4 + (op & 0xff) * 2, 2)
+        } else if op & 0xf000 == 0xd000 {
+            (((i as u32 + 4 + (op & 0xff) * 4) & !3), 4)
+        } else {
+            continue;
+        };
+        if target >= section_start as u32 && target + size <= section_end as u32 {
+            literal_halfwords.insert(target);
+            if size == 4 {
+                literal_halfwords.insert(target + 2);
+            }
+        }
+    }
+
     // first, find every location of an rts.
     let mut rts_pos: Vec<u32> = Vec::new();
     for i in (section_start..section_end).step_by(2) {
         let instr = (vec[i as usize] as u32) << 8 | vec[i as usize + 1] as u32;
-        if instr == 0x000b {
+        if instr == 0x000b && !literal_halfwords.contains(&(i as u32)) {
             rts_pos.push(i as u32);
         }
     }
 
     for i in 0..rts_pos.len() {
-        let pc = rts_pos[i] - 2;
         let prev_rts = if i > 0 { rts_pos[i - 1] } else { 0 };
+        let has_literal_rts = literal_halfwords.iter().any(|&offset| {
+            offset > prev_rts
+                && offset < rts_pos[i]
+                && ((vec[offset as usize] as u32) << 8
+                    | vec[offset as usize + 1] as u32)
+                    == 0x000b
+        });
         let mut func_start = 0;
-        let mut preamble_found = false;
-
-        let mut pc = pc;
-        // now scan back from rts[i] to rts[i - 1] to try to find the function preamble
+        let mut longest_preamble = 0;
+        let mut pc = rts_pos[i] - 2;
+        // Scan back to the previous return and select the longest contiguous
+        // register-save sequence. A function can push a temporary value in its
+        // body, so the closest push to the return is not necessarily its prologue.
         while pc >= prev_rts && pc > 0 {
             let instr = (vec[pc as usize] as u32) << 8 | vec[(pc + 1) as usize] as u32;
 
-            if !preamble_found {
-                if instr & 0xFF0F == 0x2F06 {
-                    preamble_found = true;
+            if instr & 0xFF0F == 0x2F06 {
+                let mut run_start = pc;
+                let mut run_len = 1;
+                while run_start >= prev_rts + 2 && run_start > 2 {
+                    let previous = run_start - 2;
+                    let previous_instr = (vec[previous as usize] as u32) << 8
+                        | vec[(previous + 1) as usize] as u32;
+                    if previous_instr & 0xFF06 != 0x2F06 {
+                        break;
+                    }
+                    run_start = previous;
+                    run_len += 1;
                 }
-            } else {
-                if instr & 0xFF06 != 0x2F06 {
-                    func_start = pc + 2;
+                if run_len > longest_preamble {
+                    longest_preamble = run_len;
+                    func_start = run_start;
+                }
+                if !has_literal_rts {
                     break;
                 }
+                pc = run_start;
             }
 
             pc -= 2;
@@ -1973,6 +2010,51 @@ pub fn gen_ld_script(zero_prefix: &str, addr: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn words_bytes(words: &[u16]) -> Vec<u8> {
+        words.iter().flat_map(|word| word.to_be_bytes()).collect()
+    }
+
+    #[test]
+    fn test_find_funcs_ignores_rts_inside_referenced_long_literal() {
+        let bytes = words_bytes(&[
+            0x0009, 0x0009, 0x2f86, 0xd102, 0x0009, 0x0009, 0x0009, 0x0009, 0xf000,
+            0x000b, 0x6ef6, 0x000b, 0x68f6,
+        ]);
+        let mut ranges = Vec::new();
+
+        find_funcs(&bytes, 0, bytes.len() as u64, &mut ranges);
+
+        assert_eq!(ranges.len(), 1);
+        assert_eq!(ranges[0].phys_start, 4);
+        assert_eq!(ranges[0].phys_end, 24);
+    }
+
+    #[test]
+    fn test_find_funcs_does_not_ignore_unreferenced_rts_pattern() {
+        let bytes = words_bytes(&[0x0009, 0x0009, 0x2f86, 0x0009, 0xf000, 0x000b, 0x68f6]);
+        let mut ranges = Vec::new();
+
+        find_funcs(&bytes, 0, bytes.len() as u64, &mut ranges);
+
+        assert_eq!(ranges.len(), 1);
+        assert_eq!(ranges[0].phys_start, 4);
+        assert_eq!(ranges[0].phys_end, 12);
+    }
+
+    #[test]
+    fn test_find_funcs_prefers_full_prologue_over_internal_push() {
+        let bytes = words_bytes(&[
+            0x0009, 0x0009, 0x2f86, 0x2f96, 0x2fa6, 0xd102, 0x0009, 0x0009, 0x0009,
+            0x0009, 0xf000, 0x000b, 0x2fd6, 0x0009, 0x000b, 0x68f6,
+        ]);
+        let mut ranges = Vec::new();
+
+        find_funcs(&bytes, 0, bytes.len() as u64, &mut ranges);
+
+        assert_eq!(ranges.len(), 1);
+        assert_eq!(ranges[0].phys_start, 4);
+    }
 
     #[test]
     fn test_ld_script() {
