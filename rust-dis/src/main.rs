@@ -17,6 +17,11 @@ struct DataLabel {
     source: u32,
 }
 
+struct JumpTableEntry {
+    table_label: String,
+    target_label: String,
+}
+
 fn fetch_instruction(
     file_contents: &Vec<u8>,
     virtual_address: u64,
@@ -236,8 +241,15 @@ fn match_d_f(
         0xc500 => string.push_str(&format!("mov.w @(0x{:03X}, gbr), r0", (op & 0xff) * 2)),
         0xc600 => string.push_str(&format!("mov.l @(0x{:03X}, gbr), r0", (op & 0xff) * 4)),
 
-        // mova
-        0xc600 => {}
+        0xc700 => {
+            let addr = ((v_addr + 4) & 0xfffffffc) + ((op & 0xff) * 4);
+            if let Some(label) = branch_labels.get(&addr) {
+                string.push_str(&format!("mova {}, r0", label));
+            } else {
+                string.push_str(&format!("mova 0x{:08X}, r0", addr));
+            }
+        }
+
         0x8b00 => {
             if (op & 0x80) == 0x80 {
                 let addr = (((op & 0xff) + 0xffffff00).wrapping_mul(2))
@@ -856,7 +868,142 @@ fn is_beyond_last_func(i: u32, ranges: &Vec<FunctionRange>) -> (bool, u32) {
 
 fn add_label(addr: u32, branch_labels: &mut HashMap<u32, String>) {
     let label = format!("lab_{:08X}", addr);
-    branch_labels.insert(addr, label);
+    branch_labels.entry(addr).or_insert(label);
+}
+
+fn find_jump_tables(
+    file_contents: &Vec<u8>,
+    section_start: u64,
+    section_end: u64,
+    virtual_base_addr: u64,
+    ranges: &Vec<FunctionRange>,
+    branch_labels: &mut HashMap<u32, String>,
+    jump_table_entries: &mut HashMap<u32, JumpTableEntry>,
+) {
+    for i in (section_start..section_end).step_by(2) {
+        let ii = i as usize;
+        let op = ((file_contents[ii] as u32) << 8) | file_contents[ii + 1] as u32;
+        let Some(function) = ranges
+            .iter()
+            .find(|range| i as u32 >= range.phys_start && i as u32 <= range.phys_end)
+        else {
+            continue;
+        };
+        if op & 0xff00 != 0xc700 || i < section_start + 4 || i + 8 >= section_end {
+            continue;
+        }
+
+        let next = |offset: usize| -> u32 {
+            ((file_contents[ii + offset] as u32) << 8) | file_contents[ii + offset + 1] as u32
+        };
+        if next(2) != 0x011d || next(4) != 0x301c || next(6) != 0x402b {
+            continue;
+        }
+
+        let dispatch_move_pos = ii - 4;
+        let dispatch_move = ((file_contents[dispatch_move_pos] as u32) << 8)
+            | file_contents[dispatch_move_pos + 1] as u32;
+        if dispatch_move & 0xff0f != 0x6103 {
+            continue;
+        }
+        let dispatch_register = (dispatch_move >> 4) & 0xf;
+
+        let mut max_index = None;
+        let scan_start = i.saturating_sub(48).max(section_start);
+        for address in (scan_start..i)
+            .step_by(2)
+            .collect::<Vec<_>>()
+            .into_iter()
+            .rev()
+        {
+            let pos = address as usize;
+            let compare = ((file_contents[pos] as u32) << 8) | file_contents[pos + 1] as u32;
+            if compare & 0xf00f != 0x3006 || ((compare >> 8) & 0xf) != dispatch_register {
+                continue;
+            }
+            let bound_register = (compare >> 4) & 0xf;
+            let immediate_start = address.saturating_sub(24).max(scan_start);
+            for immediate_address in (immediate_start..address)
+                .step_by(2)
+                .collect::<Vec<_>>()
+                .into_iter()
+                .rev()
+            {
+                let immediate_pos = immediate_address as usize;
+                let immediate = ((file_contents[immediate_pos] as u32) << 8)
+                    | file_contents[immediate_pos + 1] as u32;
+                if immediate & 0xf000 == 0xe000
+                    && ((immediate >> 8) & 0xf) == bound_register
+                {
+                    max_index = Some(immediate & 0xff);
+                    break;
+                }
+            }
+            break;
+        }
+        let Some(max_index) = max_index else {
+            continue;
+        };
+
+        let virtual_addr = i as u32 + virtual_base_addr as u32;
+        let table_addr = ((virtual_addr + 4) & 0xfffffffc) + ((op & 0xff) * 4);
+        let Some(table_offset) = table_addr.checked_sub(virtual_base_addr as u32) else {
+            continue;
+        };
+        let entry_count = max_index + 1;
+        let table_end = table_offset + entry_count * 2;
+        if table_offset < function.phys_start
+            || table_end > function.phys_end + 1
+            || table_end as usize > file_contents.len()
+        {
+            continue;
+        }
+
+        let table_label = format!("jtbl_{:08X}", table_addr);
+        let mut targets = Vec::new();
+        for index in 0..entry_count {
+            let entry_offset = (table_offset + index * 2) as usize;
+            let raw = ((file_contents[entry_offset] as u16) << 8)
+                | file_contents[entry_offset + 1] as u16;
+            let target = table_addr.wrapping_add((raw as i16 as i32) as u32);
+            let Some(target_offset) = target.checked_sub(virtual_base_addr as u32) else {
+                targets.clear();
+                break;
+            };
+            if target_offset < function.phys_start || target_offset > function.phys_end {
+                targets.clear();
+                break;
+            }
+            targets.push(target);
+        }
+        if targets.len() != entry_count as usize {
+            continue;
+        }
+
+        branch_labels.insert(table_addr, table_label.clone());
+        for (index, target) in targets.into_iter().enumerate() {
+            add_label(target, branch_labels);
+            let target_label = branch_labels.get(&target).unwrap().clone();
+            jump_table_entries.insert(
+                table_addr + index as u32 * 2,
+                JumpTableEntry {
+                    table_label: table_label.clone(),
+                    target_label,
+                },
+            );
+        }
+    }
+}
+
+fn remove_jump_table_internal_labels(
+    branch_labels: &mut HashMap<u32, String>,
+    jump_table_entries: &HashMap<u32, JumpTableEntry>,
+) {
+    for (address, entry) in jump_table_entries {
+        if branch_labels.get(address) != Some(&entry.table_label) {
+            branch_labels.remove(address);
+        }
+    }
 }
 
 fn add_data_label(source: u32, addr: u32, size: u32, data_labels: &mut HashMap<u32, DataLabel>) {
@@ -877,8 +1024,12 @@ fn find_branch_labels(v_addr: u32, op: u32, branch_labels: &mut HashMap<u32, Str
 
     let is_bra = (op & 0xf000) == 0xa000;
     let is_bsr = (op & 0xf000) == 0xb000;
+    let is_mova = (op & 0xff00) == 0xc700;
 
-    if is_bf || is_bfs || is_bt || is_bts {
+    if is_mova {
+        let addr = ((v_addr + 4) & 0xfffffffc) + ((op & 0xff) * 4);
+        add_label(addr, branch_labels);
+    } else if is_bf || is_bfs || is_bt || is_bts {
         // bf
         if op & 0x80 != 0 {
             /* sign extend */
@@ -1100,6 +1251,17 @@ fn handle_code_section(
 
     let mut data_labels = HashMap::<u32, DataLabel>::new();
     let mut branch_labels = HashMap::<u32, String>::new();
+    let mut jump_table_entries = HashMap::<u32, JumpTableEntry>::new();
+
+    find_jump_tables(
+        file_contents,
+        section_start,
+        section_end,
+        virtual_base_addr,
+        &ranges,
+        &mut branch_labels,
+        &mut jump_table_entries,
+    );
 
     for i in (section_start..section_end).step_by(2) {
         let ii = i as usize;
@@ -1123,6 +1285,7 @@ fn handle_code_section(
         );
     }
 
+    remove_jump_table_internal_labels(&mut branch_labels, &jump_table_entries);
     let mut disassembled_funcs = BTreeMap::<u32, DisassembledFunc>::new();
 
     // create emtpy ones for all funcs
@@ -1187,6 +1350,16 @@ fn handle_code_section(
                     monolithic.push_str(&format!("{}:\n", value));
                 }
             }
+        }
+
+        if let Some(entry) = jump_table_entries.get(&virtual_addr) {
+            if let Some(func) = disassembled_funcs.get_mut(&(start_address as u32)) {
+                func.text.push_str(&format!(
+                    "/* 0x{:08X} */ .word {}-{}\n",
+                    virtual_addr, entry.target_label, entry.table_label
+                ));
+            }
+            continue;
         }
 
         // data labels, extended addr
@@ -2069,12 +2242,8 @@ mod tests {
         assert_eq!(string, "mac.l @r15+, @r1+");
     }
 
-    #[cfg(test)]
-    mod tests {
-        use super::*;
-    
-        #[test]
-        fn test_parse_tt_000_yaml() {
+    #[test]
+    fn test_parse_tt_000_yaml() {
             let config = parse_yaml2("./config.yaml".to_string());
     
             let segments = config.segments.expect("Missing segments");
@@ -2101,6 +2270,111 @@ mod tests {
             assert_eq!(subsegments[2].start, 0x2858);
             assert_eq!(subsegments[2].end, 0x7000);
             assert_eq!(subsegments[2].segment_type.as_deref(), Some("data"));
+    }
+
+    #[test]
+    fn test_mova_jump_table() {
+        let mut bytes = vec![0u8; 0x40];
+        let words = [
+            0xe107, 0x3216, 0x6123, 0x311c, 0xc702, 0x011d, 0x301c, 0x402b, 0x0009,
+            0x0009, 0x0010, 0x0012, 0x0014, 0x0016, 0x0018, 0x001a, 0x001c, 0x001e,
+        ];
+        for (index, word) in words.iter().enumerate() {
+            bytes[index * 2] = (word >> 8) as u8;
+            bytes[index * 2 + 1] = *word as u8;
         }
+
+        let ranges = vec![FunctionRange {
+            phys_start: 0,
+            phys_end: 0x3e,
+            is_data: false,
+        }];
+        let mut branch_labels = HashMap::new();
+        let mut entries = HashMap::new();
+        find_jump_tables(
+            &bytes,
+            0,
+            bytes.len() as u64,
+            0,
+            &ranges,
+            &mut branch_labels,
+            &mut entries,
+        );
+
+        assert_eq!(branch_labels.get(&0x14).unwrap(), "jtbl_00000014");
+        assert_eq!(entries.len(), 8);
+        branch_labels.insert(0x1a, ".L0000001A".to_string());
+        remove_jump_table_internal_labels(&mut branch_labels, &entries);
+        assert!(!branch_labels.contains_key(&0x1a));
+        assert_eq!(
+            branch_labels.get(&0x14).unwrap(),
+            &entries.get(&0x14).unwrap().table_label
+        );
+
+        let mut string = String::new();
+        sh2_disasm(
+            8,
+            0xc702,
+            true,
+            &mut string,
+            &HashMap::new(),
+            &branch_labels,
+        );
+        assert_eq!(string, "mova jtbl_00000014, r0");
+    }
+
+    #[test]
+    fn test_mova_table_outside_function_is_not_classified() {
+        let mut bytes = vec![0u8; 0x100];
+        let words = [
+            0xe107, 0x3216, 0x6123, 0x311c, 0xc720, 0x011d, 0x301c, 0x402b,
+        ];
+        for (index, word) in words.iter().enumerate() {
+            bytes[index * 2] = (word >> 8) as u8;
+            bytes[index * 2 + 1] = *word as u8;
+        }
+        for index in 0..8 {
+            let entry = 0x8c + index * 2;
+            let offset = (0x20i16 - 0x8ci16) as u16;
+            bytes[entry] = (offset >> 8) as u8;
+            bytes[entry + 1] = offset as u8;
+        }
+
+        let ranges = vec![FunctionRange {
+            phys_start: 0,
+            phys_end: 0x3e,
+            is_data: false,
+        }];
+        let mut branch_labels = HashMap::new();
+        let mut entries = HashMap::new();
+        find_jump_tables(
+            &bytes,
+            0,
+            bytes.len() as u64,
+            0,
+            &ranges,
+            &mut branch_labels,
+            &mut entries,
+        );
+
+        assert!(!branch_labels.contains_key(&0x8c));
+        assert!(entries.is_empty());
+    }
+
+    #[test]
+    fn test_mova_without_table_uses_symbolic_target() {
+        let mut branch_labels = HashMap::new();
+        find_branch_labels(0x060a7420, 0xc702, &mut branch_labels);
+
+        let mut string = String::new();
+        sh2_disasm(
+            0x060a7420,
+            0xc702,
+            true,
+            &mut string,
+            &HashMap::new(),
+            &branch_labels,
+        );
+        assert_eq!(string, "mova lab_060A742C, r0");
     }
 }
