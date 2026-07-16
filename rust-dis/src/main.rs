@@ -2425,15 +2425,15 @@ mod tests {
             assert_eq!(subsegments.len(), 3);
     
             assert_eq!(subsegments[0].start, 0x0);
-            assert_eq!(subsegments[0].end, 0x5F);
+            assert_eq!(subsegments[0].end, Some(0x5F));
             assert_eq!(subsegments[0].segment_type.as_deref(), Some("data"));
     
             assert_eq!(subsegments[1].start, 0x60);
-            assert_eq!(subsegments[1].end, 0x2857);
+            assert_eq!(subsegments[1].end, Some(0x2857));
             assert_eq!(subsegments[1].segment_type.as_deref(), Some("c"));
     
             assert_eq!(subsegments[2].start, 0x2858);
-            assert_eq!(subsegments[2].end, 0x7000);
+            assert_eq!(subsegments[2].end, Some(0x7000));
             assert_eq!(subsegments[2].segment_type.as_deref(), Some("data"));
     }
 
@@ -2540,7 +2540,7 @@ mod tests {
             &HashMap::new(),
             &branch_labels,
         );
-        assert_eq!(string, "mova .L060A742C, r0");
+        assert_eq!(string, "mova .L060A742C,r0");
     }
 
     #[test]
