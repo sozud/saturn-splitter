@@ -90,7 +90,7 @@ fn match_nd8_f(
                 if let Some(value) = data_labels.get(&thing) {
                     // Use the label
                     string.push_str(&format!(
-                        "mov.w @({}, pc), r{}",
+                        "mov.w {},r{}",
                         value.label,
                         (op >> 8) & 0xf
                     ));
@@ -98,7 +98,7 @@ fn match_nd8_f(
             } else {
                 // use an address
                 string.push_str(&format!(
-                    "mov.w @(0x{:03X}, pc), r{}",
+                    "mov.w @(0x{:03X},pc),r{}",
                     (op & 0xff) * 2 + 4,
                     (op >> 8) & 0xf
                 ));
@@ -123,7 +123,7 @@ fn match_nd8_f(
                     if let Some(value) = data_labels.get(&thing) {
                         // Use the label
                         string.push_str(&format!(
-                            "mov.l @({}, pc), r{}",
+                            "mov.l {},r{}",
                             value.label,
                             (op >> 8) & 0xf
                         ));
@@ -131,7 +131,7 @@ fn match_nd8_f(
                 } else {
                     // use an address
                     string.push_str(&format!(
-                        "mov.l @(0x{:03X}, pc), r{}",
+                        "mov.l @(0x{:03X},pc),r{}",
                         target_a,
                         (op >> 8) & 0xf
                     ));
@@ -141,7 +141,7 @@ fn match_nd8_f(
                     if let Some(value) = data_labels.get(&test) {
                         // Use the label
                         string.push_str(&format!(
-                            "mov.l @({}, pc), r{}",
+                            "mov.l {},r{}",
                             value.label,
                             (op >> 8) & 0xf
                         ));
@@ -149,7 +149,7 @@ fn match_nd8_f(
                 } else {
                     // use an address
                     string.push_str(&format!(
-                        "mov.l @(0x{:03X}, pc), r{}",
+                        "mov.l @(0x{:03X},pc),r{}",
                         target_a,
                         (op >> 8) & 0xf
                     ));
@@ -235,19 +235,19 @@ fn match_d_f(
     branch_labels: &HashMap<u32, String>,
 ) {
     match op & 0xff00 {
-        0xc000 => string.push_str(&format!("mov.b r0, @(0x{:03X}, gbr)", (op & 0xff) * 1)),
-        0xc100 => string.push_str(&format!("mov.w r0, @(0x{:03X}, gbr)", (op & 0xff) * 2)),
-        0xc200 => string.push_str(&format!("mov.l r0, @(0x{:03X}, gbr)", (op & 0xff) * 4)),
-        0xc400 => string.push_str(&format!("mov.b @(0x{:03X}, gbr), r0", (op & 0xff) * 1)),
-        0xc500 => string.push_str(&format!("mov.w @(0x{:03X}, gbr), r0", (op & 0xff) * 2)),
-        0xc600 => string.push_str(&format!("mov.l @(0x{:03X}, gbr), r0", (op & 0xff) * 4)),
+        0xc000 => string.push_str(&format!("mov.b r0,@(0x{:03X},gbr)", (op & 0xff) * 1)),
+        0xc100 => string.push_str(&format!("mov.w r0,@(0x{:03X},gbr)", (op & 0xff) * 2)),
+        0xc200 => string.push_str(&format!("mov.l r0,@(0x{:03X},gbr)", (op & 0xff) * 4)),
+        0xc400 => string.push_str(&format!("mov.b @(0x{:03X},gbr),r0", (op & 0xff) * 1)),
+        0xc500 => string.push_str(&format!("mov.w @(0x{:03X},gbr),r0", (op & 0xff) * 2)),
+        0xc600 => string.push_str(&format!("mov.l @(0x{:03X},gbr),r0", (op & 0xff) * 4)),
 
         0xc700 => {
             let addr = ((v_addr + 4) & 0xfffffffc) + ((op & 0xff) * 4);
             if let Some(label) = branch_labels.get(&addr) {
-                string.push_str(&format!("mova {}, r0", label));
+                string.push_str(&format!("mova {},r0", label));
             } else {
-                string.push_str(&format!("mova 0x{:08X}, r0", addr));
+                string.push_str(&format!("mova 0x{:08X},r0", addr));
             }
         }
 
@@ -377,13 +377,13 @@ fn match_nmd_f(
 ) {
     match op & 0xf000 {
         0x1000 => string.push_str(&format!(
-            "mov.l r{}, @(0x{:03X}, r{})",
+            "mov.l r{},@(0x{:03X},r{})",
             (op >> 4) & 0xf,
             (op & 0xf) * 4,
             (op >> 8) & 0xf
         )),
         0x5000 => string.push_str(&format!(
-            "mov.l @(0x{:03X}, r{}), r{}",
+            "mov.l @(0x{:03X},r{}),r{}",
             (op & 0xf) * 4,
             (op >> 4) & 0xf,
             (op >> 8) & 0xf
@@ -403,13 +403,13 @@ fn match_ff00(
         0x8400 => {
             if (op & 0x100) == 0x100 {
                 string.push_str(&format!(
-                    "mov.b @(0x{:03X}, r{}), r0",
+                    "mov.b @(0x{:03X},r{}),r0",
                     (op & 0xf) * 2,
                     (op >> 4) & 0xf
                 ))
             } else {
                 string.push_str(&format!(
-                    "mov.b @(0x{:03X}, r{}), r0",
+                    "mov.b @(0x{:03X},r{}),r0",
                     op & 0xf,
                     (op >> 4) & 0xf
                 ))
@@ -418,13 +418,13 @@ fn match_ff00(
         0x8500 => {
             if (op & 0x100) == 0x100 {
                 string.push_str(&format!(
-                    "mov.w @(0x{:03X}, r{}), r0",
+                    "mov.w @(0x{:03X},r{}),r0",
                     (op & 0xf) * 2,
                     (op >> 4) & 0xf
                 ))
             } else {
                 string.push_str(&format!(
-                    "mov.w @(0x{:03X}, r{}), r0",
+                    "mov.w @(0x{:03X},r{}),r0",
                     op & 0xf,
                     (op >> 4) & 0xf
                 ))
@@ -433,13 +433,13 @@ fn match_ff00(
         0x8000 => {
             if (op & 0x100) == 0x100 {
                 string.push_str(&format!(
-                    "mov.b r0, @(0x{:03X}, r{})",
+                    "mov.b r0,@(0x{:03X},r{})",
                     (op & 0xf) * 2,
                     (op >> 4) & 0xf
                 ))
             } else {
                 string.push_str(&format!(
-                    "mov.b r0, @(0x{:03X}, r{})",
+                    "mov.b r0,@(0x{:03X},r{})",
                     op & 0xf,
                     (op >> 4) & 0xf
                 ))
@@ -448,13 +448,13 @@ fn match_ff00(
         0x8100 => {
             if (op & 0x100) == 0x100 {
                 string.push_str(&format!(
-                    "mov.w r0, @(0x{:03X}, r{})",
+                    "mov.w r0,@(0x{:03X},r{})",
                     (op & 0xf) * 2,
                     (op >> 4) & 0xf
                 ))
             } else {
                 string.push_str(&format!(
-                    "mov.w r0, @(0x{:03X}, r{})",
+                    "mov.w r0,@(0x{:03X},r{})",
                     op & 0xf,
                     (op >> 4) & 0xf
                 ))
@@ -564,32 +564,32 @@ fn match_f00f(
         0x200a => string.push_str(&format!("xor r{}, r{}", (op >> 4) & 0xf, (op >> 8) & 0xf)),
         0x200d => string.push_str(&format!("xtrct r{}, r{}", (op >> 4) & 0xf, (op >> 8) & 0xf)),
         0x2000 => string.push_str(&format!(
-            "mov.b r{}, @r{}",
+            "mov.b r{},@r{}",
             (op >> 4) & 0xf,
             (op >> 8) & 0xf
         )),
         0x2001 => string.push_str(&format!(
-            "mov.w r{}, @r{}",
+            "mov.w r{},@r{}",
             (op >> 4) & 0xf,
             (op >> 8) & 0xf
         )),
         0x2002 => string.push_str(&format!(
-            "mov.l r{}, @r{}",
+            "mov.l r{},@r{}",
             (op >> 4) & 0xf,
             (op >> 8) & 0xf
         )),
         0x6000 => string.push_str(&format!(
-            "mov.b @r{}, r{}",
+            "mov.b @r{},r{}",
             (op >> 4) & 0xf,
             (op >> 8) & 0xf
         )),
         0x6001 => string.push_str(&format!(
-            "mov.w @r{}, r{}",
+            "mov.w @r{},r{}",
             (op >> 4) & 0xf,
             (op >> 8) & 0xf
         )),
         0x6002 => string.push_str(&format!(
-            "mov.l @r{}, r{}",
+            "mov.l @r{},r{}",
             (op >> 4) & 0xf,
             (op >> 8) & 0xf
         )),
@@ -604,62 +604,62 @@ fn match_f00f(
             (op >> 8) & 0xf,
         )),
         0x6004 => string.push_str(&format!(
-            "mov.b @r{}+, r{}",
+            "mov.b @r{}+,r{}",
             (op >> 4) & 0xf,
             (op >> 8) & 0xf
         )),
         0x6005 => string.push_str(&format!(
-            "mov.w @r{}+, r{}",
+            "mov.w @r{}+,r{}",
             (op >> 4) & 0xf,
             (op >> 8) & 0xf
         )),
         0x6006 => string.push_str(&format!(
-            "mov.l @r{}+, r{}",
+            "mov.l @r{}+,r{}",
             (op >> 4) & 0xf,
             (op >> 8) & 0xf
         )),
         0x2004 => string.push_str(&format!(
-            "mov.b r{}, @-r{}",
+            "mov.b r{},@-r{}",
             (op >> 4) & 0xf,
             (op >> 8) & 0xf
         )),
         0x2005 => string.push_str(&format!(
-            "mov.w r{}, @-r{}",
+            "mov.w r{},@-r{}",
             (op >> 4) & 0xf,
             (op >> 8) & 0xf
         )),
         0x2006 => string.push_str(&format!(
-            "mov.l r{}, @-r{}",
+            "mov.l r{},@-r{}",
             (op >> 4) & 0xf,
             (op >> 8) & 0xf
         )),
         0x0004 => string.push_str(&format!(
-            "mov.b r{}, @(r0, r{})",
+            "mov.b r{},@(r0,r{})",
             (op >> 4) & 0xf,
             (op >> 8) & 0xf
         )),
         0x0005 => string.push_str(&format!(
-            "mov.w r{}, @(r0, r{})",
+            "mov.w r{},@(r0,r{})",
             (op >> 4) & 0xf,
             (op >> 8) & 0xf
         )),
         0x0006 => string.push_str(&format!(
-            "mov.l r{}, @(r0, r{})",
+            "mov.l r{},@(r0,r{})",
             (op >> 4) & 0xf,
             (op >> 8) & 0xf
         )),
         0x000c => string.push_str(&format!(
-            "mov.b @(r0, r{}), r{}",
+            "mov.b @(r0,r{}),r{}",
             (op >> 4) & 0xf,
             (op >> 8) & 0xf
         )),
         0x000d => string.push_str(&format!(
-            "mov.w @(r0, r{}), r{}",
+            "mov.w @(r0,r{}),r{}",
             (op >> 4) & 0xf,
             (op >> 8) & 0xf
         )),
         0x000e => string.push_str(&format!(
-            "mov.l @(r0, r{}), r{}",
+            "mov.l @(r0,r{}),r{}",
             (op >> 4) & 0xf,
             (op >> 8) & 0xf
         )),
@@ -2162,7 +2162,7 @@ mod tests {
             &mut data_labels,
             &mut branch_labels,
         );
-        assert_eq!(string, "mov.w @(0x0E0, pc), r3");
+        assert_eq!(string, "mov.w @(0x0E0,pc),r3");
     }
 
     #[test]
@@ -2178,7 +2178,7 @@ mod tests {
             &mut data_labels,
             &mut branch_labels,
         );
-        assert_eq!(string, "mov.l @(0x0DE, pc), r6");
+        assert_eq!(string, "mov.l @(0x0DE,pc),r6");
     }
 
     #[test]
@@ -2226,7 +2226,7 @@ mod tests {
             &mut data_labels,
             &mut branch_labels,
         );
-        assert_eq!(string, "mov.l r1, @(r0, r9)");
+        assert_eq!(string, "mov.l r1,@(r0,r9)");
     }
 
     #[test]
@@ -2258,7 +2258,7 @@ mod tests {
             &mut data_labels,
             &mut branch_labels,
         );
-        assert_eq!(string, "mov.w r1, @(r0, r14)");
+        assert_eq!(string, "mov.w r1,@(r0,r14)");
     }
 
     #[test]
@@ -2274,7 +2274,7 @@ mod tests {
             &mut data_labels,
             &mut branch_labels,
         );
-        assert_eq!(string, "mov.b @(0x000, r5), r0");
+        assert_eq!(string, "mov.b @(0x000,r5),r0");
     }
 
     #[test]
@@ -2290,7 +2290,7 @@ mod tests {
             &mut data_labels,
             &mut branch_labels,
         );
-        assert_eq!(string, "mov.w @(0x000, r5), r0");
+        assert_eq!(string, "mov.w @(0x000,r5),r0");
     }
 
     #[test]
@@ -2489,5 +2489,45 @@ mod tests {
 
         assert_eq!(branch_labels.get(&0x060a9200).unwrap(), ".L060A9200");
         assert_eq!(data_labels.get(&0x060a9298).unwrap().label, ".Ldat_060A9298");
+    }
+
+    #[test]
+    fn test_normalized_operand_syntax() {
+        let mut data_labels = HashMap::new();
+        add_data_label(0, 12, 4, &mut data_labels);
+        let branch_labels = HashMap::new();
+
+        let mut pc_relative = String::new();
+        sh2_disasm(
+            0,
+            0xd002,
+            true,
+            &mut pc_relative,
+            &data_labels,
+            &branch_labels,
+        );
+        assert_eq!(pc_relative, "mov.l .Ldat_0000000C,r0");
+
+        let mut displaced = String::new();
+        sh2_disasm(
+            0,
+            0x181d,
+            true,
+            &mut displaced,
+            &HashMap::new(),
+            &branch_labels,
+        );
+        assert_eq!(displaced, "mov.l r1,@(0x034,r8)");
+
+        let mut indexed = String::new();
+        sh2_disasm(
+            0,
+            0x011d,
+            true,
+            &mut indexed,
+            &HashMap::new(),
+            &branch_labels,
+        );
+        assert_eq!(indexed, "mov.w @(r0,r1),r1");
     }
 }
