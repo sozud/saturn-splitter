@@ -1212,12 +1212,10 @@ fn read_user_symbols(filename: &str) -> HashMap<u32, String> {
 fn format_literal(
     value: u32,
     user_symbols: &HashMap<u32, String>,
-    allow_symbol: bool,
+    _allow_symbol: bool,
 ) -> String {
-    if allow_symbol {
-        if let Some(symbol) = user_symbols.get(&value) {
-            return symbol.clone();
-        }
+    if let Some(symbol) = user_symbols.get(&value) {
+        return symbol.clone();
     }
     format!("0x{:08X}", value)
 }
@@ -2478,7 +2476,7 @@ mod tests {
         assert!(literal_feeds_call(&call_sequence, 0, 0));
         assert_eq!(
             format_literal(0x0600ffb8, &symbols, false),
-            "0x0600FFB8"
+            "_DestroyEntity"
         );
     }
 }
