@@ -770,20 +770,18 @@ fn find_funcs(
     section_end: u64,
     ranges: &mut Vec<FunctionRange>,
 ) {
-    let mut literal_halfwords = HashSet::<u32>::new();
+    let mut literal_rts = HashSet::<u32>::new();
     for i in (section_start..section_end).step_by(2) {
         let op = (vec[i as usize] as u32) << 8 | vec[i as usize + 1] as u32;
-        let (target, size) = if op & 0xf000 == 0x9000 {
-            (i as u32 + 4 + (op & 0xff) * 2, 2)
-        } else if op & 0xf000 == 0xd000 {
-            (((i as u32 + 4 + (op & 0xff) * 4) & !3), 4)
-        } else {
+        if op & 0xf000 != 0xd000 {
             continue;
-        };
-        if target >= section_start as u32 && target + size <= section_end as u32 {
-            literal_halfwords.insert(target);
-            if size == 4 {
-                literal_halfwords.insert(target + 2);
+        }
+        let target = (i as u32 + 4 + (op & 0xff) * 4) & !3;
+        if target >= section_start as u32 && target + 4 <= section_end as u32 {
+            let high = (vec[target as usize] as u32) << 8 | vec[target as usize + 1] as u32;
+            let low = (vec[target as usize + 2] as u32) << 8 | vec[target as usize + 3] as u32;
+            if high & 0xf000 == 0xf000 && low == 0x000b {
+                literal_rts.insert(target + 2);
             }
         }
     }
@@ -792,14 +790,14 @@ fn find_funcs(
     let mut rts_pos: Vec<u32> = Vec::new();
     for i in (section_start..section_end).step_by(2) {
         let instr = (vec[i as usize] as u32) << 8 | vec[i as usize + 1] as u32;
-        if instr == 0x000b && !literal_halfwords.contains(&(i as u32)) {
+        if instr == 0x000b && !literal_rts.contains(&(i as u32)) {
             rts_pos.push(i as u32);
         }
     }
 
     for i in 0..rts_pos.len() {
         let prev_rts = if i > 0 { rts_pos[i - 1] } else { 0 };
-        let has_literal_rts = literal_halfwords.iter().any(|&offset| {
+        let has_literal_rts = literal_rts.iter().any(|&offset| {
             offset > prev_rts
                 && offset < rts_pos[i]
                 && ((vec[offset as usize] as u32) << 8
@@ -2040,6 +2038,36 @@ mod tests {
         assert_eq!(ranges.len(), 1);
         assert_eq!(ranges[0].phys_start, 4);
         assert_eq!(ranges[0].phys_end, 12);
+    }
+
+    #[test]
+    fn test_find_funcs_keeps_rts_at_start_of_long_target() {
+        let bytes = words_bytes(&[
+            0x0009, 0x0009, 0x2f86, 0xd102, 0x0009, 0x0009, 0x0009, 0x0009, 0x000b,
+            0x1234,
+        ]);
+        let mut ranges = Vec::new();
+
+        find_funcs(&bytes, 0, bytes.len() as u64, &mut ranges);
+
+        assert_eq!(ranges.len(), 1);
+        assert_eq!(ranges[0].phys_start, 4);
+        assert_eq!(ranges[0].phys_end, 18);
+    }
+
+    #[test]
+    fn test_find_funcs_keeps_rts_targeted_by_word_pattern() {
+        let bytes = words_bytes(&[
+            0x0009, 0x0009, 0x2f86, 0x9303, 0x0009, 0x0009, 0x0009, 0x0009, 0x000b,
+            0x1234,
+        ]);
+        let mut ranges = Vec::new();
+
+        find_funcs(&bytes, 0, bytes.len() as u64, &mut ranges);
+
+        assert_eq!(ranges.len(), 1);
+        assert_eq!(ranges[0].phys_start, 4);
+        assert_eq!(ranges[0].phys_end, 18);
     }
 
     #[test]
