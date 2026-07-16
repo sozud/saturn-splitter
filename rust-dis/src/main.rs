@@ -868,7 +868,7 @@ fn is_beyond_last_func(i: u32, ranges: &Vec<FunctionRange>) -> (bool, u32) {
 }
 
 fn add_label(addr: u32, branch_labels: &mut HashMap<u32, String>) {
-    let label = format!("lab_{:08X}", addr);
+    let label = format!(".L{:08X}", addr);
     branch_labels.entry(addr).or_insert(label);
 }
 
@@ -960,7 +960,7 @@ fn find_jump_tables(
             continue;
         }
 
-        let table_label = format!("jtbl_{:08X}", table_addr);
+        let table_label = format!(".Ljtbl_{:08X}", table_addr);
         let mut targets = Vec::new();
         for index in 0..entry_count {
             let entry_offset = (table_offset + index * 2) as usize;
@@ -1008,7 +1008,7 @@ fn remove_jump_table_internal_labels(
 }
 
 fn add_data_label(source: u32, addr: u32, size: u32, data_labels: &mut HashMap<u32, DataLabel>) {
-    let the_label = format!("dat_{:08X}", addr);
+    let the_label = format!(".Ldat_{:08X}", addr);
     let data_label = DataLabel {
         size,
         label: the_label,
@@ -2384,7 +2384,7 @@ mod tests {
             &mut entries,
         );
 
-        assert_eq!(branch_labels.get(&0x14).unwrap(), "jtbl_00000014");
+        assert_eq!(branch_labels.get(&0x14).unwrap(), ".Ljtbl_00000014");
         assert_eq!(entries.len(), 8);
         branch_labels.insert(0x1a, ".L0000001A".to_string());
         remove_jump_table_internal_labels(&mut branch_labels, &entries);
@@ -2403,7 +2403,7 @@ mod tests {
             &HashMap::new(),
             &branch_labels,
         );
-        assert_eq!(string, "mova jtbl_00000014, r0");
+        assert_eq!(string, "mova .Ljtbl_00000014,r0");
     }
 
     #[test]
@@ -2458,7 +2458,7 @@ mod tests {
             &HashMap::new(),
             &branch_labels,
         );
-        assert_eq!(string, "mova lab_060A742C, r0");
+        assert_eq!(string, "mova .L060A742C, r0");
     }
 
     #[test]
@@ -2478,5 +2478,16 @@ mod tests {
             format_literal(0x0600ffb8, &symbols, false),
             "_DestroyEntity"
         );
+    }
+
+    #[test]
+    fn test_generated_labels_are_local() {
+        let mut branch_labels = HashMap::new();
+        let mut data_labels = HashMap::new();
+        add_label(0x060a9200, &mut branch_labels);
+        add_data_label(0x060a91e0, 0x060a9298, 4, &mut data_labels);
+
+        assert_eq!(branch_labels.get(&0x060a9200).unwrap(), ".L060A9200");
+        assert_eq!(data_labels.get(&0x060a9298).unwrap().label, ".Ldat_060A9298");
     }
 }
