@@ -1,0 +1,20 @@
+options:
+  target_path: build/sh2data/original.bin
+  asm_path: tools/saturn-splitter/rust-dis/tests/sh2-data/asm
+  src_path: tools/saturn-splitter/rust-dis/tests/sh2-data/src
+  obj_path: build/sh2data
+  ld_scripts_path: build/sh2data
+  syms_path: build/sh2data
+  check_layout: true
+  decomp_empty_funcs: false
+segments:
+  - name: fixture
+    type: code
+    start: 0
+    vram: 0x06010000
+    subalign: 2
+    subsegments:
+      - [0x0, .data, header]
+      - [0x8, c, main]
+      - [0x2C, .data, anim]
+      - [0x34, .data, links]

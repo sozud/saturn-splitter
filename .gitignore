@@ -6,5 +6,7 @@
 T_BAT.PRG
 /rust-dis/output
 /rust-dis/target
+/rust-dis/tests/sh2-data/asm
+/rust-dis/tests/sh2-data/build
 main.zip
 /rust-dis/mono.txt
