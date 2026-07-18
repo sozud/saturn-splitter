@@ -1,6 +1,7 @@
 // why is 14c0 made into data?
 
 use regex::Regex;
+use serde::de::Deserializer;
 use serde_derive::Deserialize;
 use serde_yaml;
 use std::collections::BTreeMap;
@@ -1170,16 +1171,57 @@ struct Options {
     src_path: String,
     #[serde(default)]
     obj_path: String,
+    #[serde(default)]
+    check_layout: bool,
     decomp_empty_funcs: bool,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug)]
 struct Subsegment {
     start: u64,
     end: Option<u64>,
-    #[serde(rename = "type")]
     segment_type: Option<String>,
     file: Option<String>,
+}
+
+impl<'de> serde::Deserialize<'de> for Subsegment {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        #[derive(Deserialize)]
+        #[serde(untagged)]
+        enum SubsegmentSyntax {
+            Mapping {
+                start: u64,
+                end: Option<u64>,
+                #[serde(rename = "type")]
+                segment_type: Option<String>,
+                file: Option<String>,
+            },
+            Compact((u64, String, String)),
+        }
+
+        match <SubsegmentSyntax as serde::Deserialize>::deserialize(deserializer)? {
+            SubsegmentSyntax::Mapping {
+                start,
+                end,
+                segment_type,
+                file,
+            } => Ok(Self {
+                start,
+                end,
+                segment_type,
+                file,
+            }),
+            SubsegmentSyntax::Compact((start, segment_type, file)) => Ok(Self {
+                start,
+                end: None,
+                segment_type: Some(segment_type),
+                file: Some(file),
+            }),
+        }
+    }
 }
 
 #[derive(Debug, Deserialize)]
@@ -1214,7 +1256,7 @@ fn parse_yaml2(filename: String) -> Config {
             if let Some(ref mut subsegments) = segment.subsegments {
                 for i in 0..subsegments.len().saturating_sub(1) {
                     if subsegments[i].end.is_none() {
-                        subsegments[i].end = Option::from(subsegments[i + 1].start - 1)
+                        subsegments[i].end = Some(subsegments[i + 1].start)
                     }
                 }
             }
@@ -1629,7 +1671,7 @@ fn handle_segments(file_contents: &Vec<u8>, config: &Config) {
                         subsegment_start, subsegment_end, subsegment_type, subsegment_file,
                     );
 
-                    if subsegment_type == "data" {
+                    if subsegment_type == "data" || subsegment_type.starts_with('.') {
                         // just emit words
                         let mut data_str = String::new();
                         for i in (subsegment_start..subsegment_end).step_by(2) {
@@ -1796,13 +1838,14 @@ fn handle_segments(file_contents: &Vec<u8>, config: &Config) {
             {
                 // The linker script is generated entirely from the YAML so it can be ephemeral.
                 let filename = format!("{}/{}.ld", &config.options.ld_scripts_path, segment_name);
-                let object_files = linker_object_files(&segs[0]);
+                let inputs = linker_inputs(&segs[0]);
                 let linker_script = gen_ld_script(
                     segment_name,
                     &format!("{:08X}", base_addr),
                     segs[0].subalign.unwrap_or(2),
                     &config.options.obj_path,
-                    &object_files,
+                    config.options.check_layout,
+                    &inputs,
                 );
                 let contents = format!("{}\n", linker_script);
                 if std::fs::read_to_string(&filename).ok().as_deref() != Some(&contents) {
@@ -1978,32 +2021,50 @@ fn asm_test_case(asm: String, expected: String, virtual_base_addr: u64) {
     }
 }
 
-fn linker_object_files(segment: &Segment) -> Vec<String> {
+#[derive(Debug, PartialEq)]
+struct LinkerInput {
+    start: u64,
+    object: String,
+    section: String,
+}
+
+fn linker_inputs(segment: &Segment) -> Vec<LinkerInput> {
     let mut seen = HashSet::new();
-    let mut objects = Vec::new();
+    let mut inputs = Vec::new();
 
     if let Some(subsegments) = &segment.subsegments {
         for subsegment in subsegments {
-            if subsegment.segment_type.as_deref() != Some("c") {
+            let section = match subsegment.segment_type.as_deref() {
+                Some("c") => ".text",
+                Some(".data") => ".data",
+                Some(".rodata") => ".rodata",
+                Some(".bss") => ".bss",
+                Some(".sbss") => ".sbss",
+                _ => continue,
+            };
+            let Some(file) = &subsegment.file else {
                 continue;
-            }
-            if let Some(file) = &subsegment.file {
-                if seen.insert(file.clone()) {
-                    objects.push(format!("{}.o", file));
-                }
+            };
+            if seen.insert((file.clone(), section)) {
+                inputs.push(LinkerInput {
+                    start: subsegment.start,
+                    object: format!("{}.o", file),
+                    section: section.to_string(),
+                });
             }
         }
     }
 
-    objects
+    inputs
 }
 
-pub fn gen_ld_script(
+fn gen_ld_script(
     zero_prefix: &str,
     addr: &str,
     subalign: u64,
     obj_path: &str,
-    objects: &[String],
+    check_layout: bool,
+    inputs: &[LinkerInput],
 ) -> String {
     let mut code = String::new();
 
@@ -2020,13 +2081,21 @@ pub fn gen_ld_script(
         zero_prefix, addr, zero_prefix, subalign
     ));
     code.push_str(&format!("        {}_TEXT_START = .;\n", zero_prefix));
-    for object in objects {
+    for input in inputs {
+        if check_layout {
+            code.push_str(&format!(
+                "        ASSERT(. == 0x{:X}, \"{} {} starts at the wrong offset\");\n",
+                input.start,
+                input.object,
+                input.section,
+            ));
+        }
         let path = if obj_path.is_empty() {
-            object.clone()
+            input.object.clone()
         } else {
-            format!("{}/{}", obj_path.trim_end_matches('/'), object)
+            format!("{}/{}", obj_path.trim_end_matches('/'), input.object)
         };
-        code.push_str(&format!("        {}(.text);\n", path));
+        code.push_str(&format!("        {}({});\n", path, input.section));
     }
     code.push_str(&format!("        {}_TEXT_END = .;\n", zero_prefix));
     code.push_str(&format!(
@@ -2154,14 +2223,19 @@ mod tests {
             "06004080",
             2,
             "build/saturn",
-            &["zero.o".to_string()],
+            false,
+            &[LinkerInput {
+                start: 0,
+                object: "zero.o".to_string(),
+                section: ".text".to_string(),
+            }],
         );
         print_diff(expected.to_string(), actual.clone());
         assert!(expected == actual);
     }
 
     #[test]
-    fn test_linker_object_files_are_ordered_and_deduplicated() {
+    fn test_linker_inputs_are_ordered_and_deduplicated() {
         let segment = Segment {
             name: "zero".to_string(),
             segment_type: "code".to_string(),
@@ -2197,12 +2271,69 @@ mod tests {
         };
 
         assert_eq!(
-            linker_object_files(&segment),
+            linker_inputs(&segment),
             vec![
-                "zero.o".to_string(),
-                "lib/spr/spr_1c.o".to_string(),
+                LinkerInput {
+                    start: 8,
+                    object: "zero.o".to_string(),
+                    section: ".text".to_string(),
+                },
+                LinkerInput {
+                    start: 16,
+                    object: "lib/spr/spr_1c.o".to_string(),
+                    section: ".text".to_string(),
+                },
             ]
         );
+    }
+
+    #[test]
+    fn test_splat_style_named_sections_generate_in_yaml_order() {
+        let yaml = r#"
+options:
+  target_path: fixture.bin
+  asm_path: asm
+  src_path: src
+  obj_path: build
+  ld_scripts_path: build
+  syms_path: build
+  check_layout: true
+  decomp_empty_funcs: false
+segments:
+  - name: fixture
+    type: code
+    start: 0
+    vram: 0x06010000
+    subalign: 2
+    subsegments:
+      - [0x0, .data, header]
+      - [0x8, c, main]
+      - [0x20, .data, animations]
+      - [0x28, .rodata, tables]
+"#;
+        let config: Config = serde_yaml::from_str(yaml).unwrap();
+        let segment = &config.segments.as_ref().unwrap()[0];
+        let inputs = linker_inputs(segment);
+
+        assert_eq!(
+            inputs,
+            vec![
+                LinkerInput { start: 0, object: "header.o".to_string(), section: ".data".to_string() },
+                LinkerInput { start: 8, object: "main.o".to_string(), section: ".text".to_string() },
+                LinkerInput { start: 0x20, object: "animations.o".to_string(), section: ".data".to_string() },
+                LinkerInput { start: 0x28, object: "tables.o".to_string(), section: ".rodata".to_string() },
+            ]
+        );
+
+        let script = gen_ld_script("fixture", "06010000", 2, "build", true, &inputs);
+        assert!(script.contains("ASSERT(. == 0x0"));
+        assert!(script.contains("build/header.o(.data);"));
+        assert!(script.contains("ASSERT(. == 0x8"));
+        assert!(script.contains("build/main.o(.text);"));
+        assert!(script.contains("ASSERT(. == 0x20"));
+        assert!(script.contains("build/animations.o(.data);"));
+        assert!(script.contains("ASSERT(. == 0x28"));
+        assert!(script.contains("build/tables.o(.rodata);"));
     }
 
     fn test_base_mov_l(expected: String, base: u64) {
