@@ -1168,6 +1168,8 @@ struct Options {
     ld_scripts_path: String,
     syms_path: String,
     src_path: String,
+    #[serde(default)]
+    obj_path: String,
     decomp_empty_funcs: bool,
 }
 
@@ -1188,6 +1190,7 @@ struct Segment {
     start: u64,
     subsegments: Option<Vec<Subsegment>>,
     vram: u64,
+    subalign: Option<u64>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -1791,17 +1794,20 @@ fn handle_segments(file_contents: &Vec<u8>, config: &Config) {
             }
 
             {
-                // write linker script
+                // The linker script is generated entirely from the YAML so it can be ephemeral.
                 let filename = format!("{}/{}.ld", &config.options.ld_scripts_path, segment_name);
-
-                if Path::new(&filename).exists() {
-                    println!("Linker file exists, skipping");
-                } else {
-                    let mut linker_file = std::fs::File::create(filename)
-                        .expect("Failed to create linker script file.");
-                    let linker_script = gen_ld_script(segment_name, &format!("{:08X}", base_addr));
-                    writeln!(&mut linker_file, "{}", linker_script)
-                        .expect("Failed to write to linker script file.");
+                let object_files = linker_object_files(&segs[0]);
+                let linker_script = gen_ld_script(
+                    segment_name,
+                    &format!("{:08X}", base_addr),
+                    segs[0].subalign.unwrap_or(2),
+                    &config.options.obj_path,
+                    &object_files,
+                );
+                let contents = format!("{}\n", linker_script);
+                if std::fs::read_to_string(&filename).ok().as_deref() != Some(&contents) {
+                    std::fs::write(filename, contents)
+                        .expect("Failed to write linker script file.");
                 }
             }
 
@@ -1972,7 +1978,33 @@ fn asm_test_case(asm: String, expected: String, virtual_base_addr: u64) {
     }
 }
 
-pub fn gen_ld_script(zero_prefix: &str, addr: &str) -> String {
+fn linker_object_files(segment: &Segment) -> Vec<String> {
+    let mut seen = HashSet::new();
+    let mut objects = Vec::new();
+
+    if let Some(subsegments) = &segment.subsegments {
+        for subsegment in subsegments {
+            if subsegment.segment_type.as_deref() != Some("c") {
+                continue;
+            }
+            if let Some(file) = &subsegment.file {
+                if seen.insert(file.clone()) {
+                    objects.push(format!("{}.o", file));
+                }
+            }
+        }
+    }
+
+    objects
+}
+
+pub fn gen_ld_script(
+    zero_prefix: &str,
+    addr: &str,
+    subalign: u64,
+    obj_path: &str,
+    objects: &[String],
+) -> String {
     let mut code = String::new();
 
     code.push_str("SECTIONS\n{\n");
@@ -1984,11 +2016,18 @@ pub fn gen_ld_script(zero_prefix: &str, addr: &str) -> String {
         zero_prefix, zero_prefix
     ));
     code.push_str(&format!(
-        "    .{} 0x{} : AT({}_ROM_START) SUBALIGN(2)\n    {{\n",
-        zero_prefix, addr, zero_prefix
+        "    .{} 0x{} : AT({}_ROM_START) SUBALIGN({})\n    {{\n",
+        zero_prefix, addr, zero_prefix, subalign
     ));
     code.push_str(&format!("        {}_TEXT_START = .;\n", zero_prefix));
-    code.push_str(&format!("        {}.o(.text);\n", zero_prefix));
+    for object in objects {
+        let path = if obj_path.is_empty() {
+            object.clone()
+        } else {
+            format!("{}/{}", obj_path.trim_end_matches('/'), object)
+        };
+        code.push_str(&format!("        {}(.text);\n", path));
+    }
     code.push_str(&format!("        {}_TEXT_END = .;\n", zero_prefix));
     code.push_str(&format!(
         "        {}_TEXT_SIZE = ABSOLUTE({}_TEXT_END - {}_TEXT_START);\n    }}\n",
@@ -2095,7 +2134,7 @@ mod tests {
     .zero 0x06004080 : AT(zero_ROM_START) SUBALIGN(2)
     {
         zero_TEXT_START = .;
-        zero.o(.text);
+        build/saturn/zero.o(.text);
         zero_TEXT_END = .;
         zero_TEXT_SIZE = ABSOLUTE(zero_TEXT_END - zero_TEXT_START);
     }
@@ -2110,9 +2149,60 @@ mod tests {
     }
 }"#;
 
-        let actual = gen_ld_script("zero", "06004080");
+        let actual = gen_ld_script(
+            "zero",
+            "06004080",
+            2,
+            "build/saturn",
+            &["zero.o".to_string()],
+        );
         print_diff(expected.to_string(), actual.clone());
         assert!(expected == actual);
+    }
+
+    #[test]
+    fn test_linker_object_files_are_ordered_and_deduplicated() {
+        let segment = Segment {
+            name: "zero".to_string(),
+            segment_type: "code".to_string(),
+            start: 0,
+            vram: 0x06004080,
+            subalign: Some(4),
+            subsegments: Some(vec![
+                Subsegment {
+                    start: 0,
+                    end: Some(8),
+                    segment_type: Some("data".to_string()),
+                    file: Some("zero".to_string()),
+                },
+                Subsegment {
+                    start: 8,
+                    end: Some(16),
+                    segment_type: Some("c".to_string()),
+                    file: Some("zero".to_string()),
+                },
+                Subsegment {
+                    start: 16,
+                    end: Some(24),
+                    segment_type: Some("c".to_string()),
+                    file: Some("lib/spr/spr_1c".to_string()),
+                },
+                Subsegment {
+                    start: 24,
+                    end: Some(32),
+                    segment_type: Some("c".to_string()),
+                    file: Some("zero".to_string()),
+                },
+            ]),
+        };
+
+        assert_eq!(
+            linker_object_files(&segment),
+            vec![
+                "zero.o".to_string(),
+                "lib/spr/spr_1c.o".to_string(),
+            ]
+        );
     }
 
     fn test_base_mov_l(expected: String, base: u64) {
