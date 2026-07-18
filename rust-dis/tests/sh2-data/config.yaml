@@ -1,7 +1,7 @@
 options:
   target_path: build/sh2data/original.bin
-  asm_path: tools/saturn-splitter/rust-dis/tests/sh2-data/asm
-  src_path: tools/saturn-splitter/rust-dis/tests/sh2-data/src
+  asm_path: tests/sh2-data/asm
+  src_path: tests/sh2-data/src
   obj_path: build/sh2data
   ld_scripts_path: build/sh2data
   syms_path: build/sh2data

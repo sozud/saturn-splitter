@@ -1,16 +1,19 @@
 #!/bin/sh
 set -eu
 
-fixture_dir=tools/saturn-splitter/rust-dis/tests/sh2-data
+script_dir=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
+rust_dis_dir=$(CDPATH= cd -- "$script_dir/../.." && pwd)
+cd "$rust_dis_dir"
+
+fixture_dir=tests/sh2-data
 build_dir=build/sh2data
+sh2_cc=${SH2_CC:-sh2-gcc}
 
 mkdir -p "$build_dir"
 
 for name in header main anim links; do
-    cpp -I"$fixture_dir/src" -undef -D__GNUC__=2 -D__GNUC_MINOR__=7 \
-        -D__sh__ -D__sh2__ "$fixture_dir/src/$name.c" "$build_dir/$name.cpp"
-    sh tools/builds/dosemu_wrapper.sh \
-        "$build_dir/$name.cpp" "$build_dir/$name.s" O2
+    "$sh2_cc" -O2 -m2 -fsigned-char -S -I"$fixture_dir/src" \
+        "$fixture_dir/src/$name.c" -o "$build_dir/$name.s"
     sh-elf-as -no-pad-sections "$build_dir/$name.s" \
         -o "$build_dir/$name.cof"
     sh-elf-objcopy -Icoff-sh -Oelf32-sh "$build_dir/$name.cof" \
@@ -25,7 +28,7 @@ sh-elf-objcopy -O binary "$build_dir/original.elf" \
 
 echo "b5bd17ac8e0e1ce45801ed22c984f73cb6ad2c12  $build_dir/original.bin" | sha1sum -c -
 
-tools/saturn-splitter/rust-dis/target/release/rust-dis "$fixture_dir/config.yaml"
+target/release/rust-dis "$fixture_dir/config.yaml"
 
 sh-elf-ld --no-check-sections -nostdlib \
     -T "$build_dir/fixture.ld" \
