@@ -2031,11 +2031,23 @@ struct LinkerInput {
 fn linker_inputs(segment: &Segment) -> Vec<LinkerInput> {
     let mut seen = HashSet::new();
     let mut inputs = Vec::new();
+    let mut legacy_text_starts = HashMap::new();
 
     if let Some(subsegments) = &segment.subsegments {
         for subsegment in subsegments {
+            if matches!(subsegment.segment_type.as_deref(), Some("data") | Some("c")) {
+                if let Some(file) = &subsegment.file {
+                    legacy_text_starts
+                        .entry(file.clone())
+                        .and_modify(|start: &mut u64| *start = (*start).min(subsegment.start))
+                        .or_insert(subsegment.start);
+                }
+            }
+        }
+        for subsegment in subsegments {
             let section = match subsegment.segment_type.as_deref() {
                 Some("c") => ".text",
+                Some(".text") => ".text",
                 Some(".data") => ".data",
                 Some(".rodata") => ".rodata",
                 Some(".bss") => ".bss",
@@ -2047,7 +2059,11 @@ fn linker_inputs(segment: &Segment) -> Vec<LinkerInput> {
             };
             if seen.insert((file.clone(), section)) {
                 inputs.push(LinkerInput {
-                    start: subsegment.start,
+                    start: if subsegment.segment_type.as_deref() == Some("c") {
+                        legacy_text_starts[file]
+                    } else {
+                        subsegment.start
+                    },
                     object: format!("{}.o", file),
                     section: section.to_string(),
                 });
@@ -2084,7 +2100,8 @@ fn gen_ld_script(
     for input in inputs {
         if check_layout {
             code.push_str(&format!(
-                "        ASSERT(. == 0x{:X}, \"{} {} starts at the wrong offset\");\n",
+                "        ASSERT(. - ADDR(.{}) == 0x{:X}, \"{} {} starts at the wrong offset\");\n",
+                zero_prefix,
                 input.start,
                 input.object,
                 input.section,
@@ -2244,13 +2261,13 @@ mod tests {
             subalign: Some(4),
             subsegments: Some(vec![
                 Subsegment {
-                    start: 0,
+                    start: 8,
                     end: Some(8),
                     segment_type: Some("data".to_string()),
                     file: Some("zero".to_string()),
                 },
                 Subsegment {
-                    start: 8,
+                    start: 0,
                     end: Some(16),
                     segment_type: Some("c".to_string()),
                     file: Some("zero".to_string()),
@@ -2274,7 +2291,7 @@ mod tests {
             linker_inputs(&segment),
             vec![
                 LinkerInput {
-                    start: 8,
+                    start: 0,
                     object: "zero.o".to_string(),
                     section: ".text".to_string(),
                 },
@@ -2310,6 +2327,7 @@ segments:
       - [0x8, c, main]
       - [0x20, .data, animations]
       - [0x28, .rodata, tables]
+      - [0x30, .text, raw_tail]
 "#;
         let config: Config = serde_yaml::from_str(yaml).unwrap();
         let segment = &config.segments.as_ref().unwrap()[0];
@@ -2322,18 +2340,21 @@ segments:
                 LinkerInput { start: 8, object: "main.o".to_string(), section: ".text".to_string() },
                 LinkerInput { start: 0x20, object: "animations.o".to_string(), section: ".data".to_string() },
                 LinkerInput { start: 0x28, object: "tables.o".to_string(), section: ".rodata".to_string() },
+                LinkerInput { start: 0x30, object: "raw_tail.o".to_string(), section: ".text".to_string() },
             ]
         );
 
         let script = gen_ld_script("fixture", "06010000", 2, "build", true, &inputs);
-        assert!(script.contains("ASSERT(. == 0x0"));
+        assert!(script.contains("ASSERT(. - ADDR(.fixture) == 0x0"));
         assert!(script.contains("build/header.o(.data);"));
-        assert!(script.contains("ASSERT(. == 0x8"));
+        assert!(script.contains("ASSERT(. - ADDR(.fixture) == 0x8"));
         assert!(script.contains("build/main.o(.text);"));
-        assert!(script.contains("ASSERT(. == 0x20"));
+        assert!(script.contains("ASSERT(. - ADDR(.fixture) == 0x20"));
         assert!(script.contains("build/animations.o(.data);"));
-        assert!(script.contains("ASSERT(. == 0x28"));
+        assert!(script.contains("ASSERT(. - ADDR(.fixture) == 0x28"));
         assert!(script.contains("build/tables.o(.rodata);"));
+        assert!(script.contains("ASSERT(. - ADDR(.fixture) == 0x30"));
+        assert!(script.contains("build/raw_tail.o(.text);"));
     }
 
     fn test_base_mov_l(expected: String, base: u64) {
