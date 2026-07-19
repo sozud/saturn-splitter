@@ -2032,6 +2032,7 @@ fn linker_inputs(segment: &Segment) -> Vec<LinkerInput> {
     let mut seen = HashSet::new();
     let mut inputs = Vec::new();
     let mut legacy_text_starts = HashMap::new();
+    let mut legacy_c_files = HashSet::new();
 
     if let Some(subsegments) = &segment.subsegments {
         for subsegment in subsegments {
@@ -2041,12 +2042,19 @@ fn linker_inputs(segment: &Segment) -> Vec<LinkerInput> {
                         .entry(file.clone())
                         .and_modify(|start: &mut u64| *start = (*start).min(subsegment.start))
                         .or_insert(subsegment.start);
+                    if subsegment.segment_type.as_deref() == Some("c") {
+                        legacy_c_files.insert(file.clone());
+                    }
                 }
             }
         }
         for subsegment in subsegments {
+            let Some(file) = &subsegment.file else {
+                continue;
+            };
             let section = match subsegment.segment_type.as_deref() {
                 Some("c") => ".text",
+                Some("data") if !legacy_c_files.contains(file) => ".text",
                 Some(".text") => ".text",
                 Some(".data") => ".data",
                 Some(".rodata") => ".rodata",
@@ -2054,12 +2062,10 @@ fn linker_inputs(segment: &Segment) -> Vec<LinkerInput> {
                 Some(".sbss") => ".sbss",
                 _ => continue,
             };
-            let Some(file) = &subsegment.file else {
-                continue;
-            };
             if seen.insert((file.clone(), section)) {
                 inputs.push(LinkerInput {
-                    start: if subsegment.segment_type.as_deref() == Some("c") {
+                    start: if matches!(subsegment.segment_type.as_deref(), Some("c") | Some("data"))
+                    {
                         legacy_text_starts[file]
                     } else {
                         subsegment.start
@@ -2327,7 +2333,9 @@ segments:
       - [0x8, c, main]
       - [0x20, .data, animations]
       - [0x28, .rodata, tables]
-      - [0x30, .text, raw_tail]
+      - start: 0x30
+        type: data
+        file: raw_tail
 "#;
         let config: Config = serde_yaml::from_str(yaml).unwrap();
         let segment = &config.segments.as_ref().unwrap()[0];
