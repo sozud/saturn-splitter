@@ -1208,6 +1208,7 @@ struct Subsegment {
     end: Option<u64>,
     segment_type: Option<String>,
     file: Option<String>,
+    function_ranges: Vec<[u32; 2]>,
 }
 
 impl<'de> serde::Deserialize<'de> for Subsegment {
@@ -1224,6 +1225,8 @@ impl<'de> serde::Deserialize<'de> for Subsegment {
                 #[serde(rename = "type")]
                 segment_type: Option<String>,
                 file: Option<String>,
+                #[serde(default)]
+                function_ranges: Vec<[u32; 2]>,
             },
             Compact((u64, String, String)),
         }
@@ -1234,17 +1237,20 @@ impl<'de> serde::Deserialize<'de> for Subsegment {
                 end,
                 segment_type,
                 file,
+                function_ranges,
             } => Ok(Self {
                 start,
                 end,
                 segment_type,
                 file,
+                function_ranges,
             }),
             SubsegmentSyntax::Compact((start, segment_type, file)) => Ok(Self {
                 start,
                 end: None,
                 segment_type: Some(segment_type),
                 file: Some(file),
+                function_ranges: Vec::new(),
             }),
         }
     }
@@ -1414,10 +1420,22 @@ fn handle_code_section(
     section_end: u64,
     virtual_base_addr: u64,
     user_symbols: &HashMap<u32, String>,
+    forced_function_ranges: &[[u32; 2]],
 ) -> (BTreeMap<u32, DisassembledFunc>) {
     let len = file_contents.len();
     let mut ranges = Vec::<FunctionRange>::new();
     find_funcs(&file_contents, section_start, section_end, &mut ranges);
+
+    for &[phys_start, phys_end] in forced_function_ranges {
+        assert!(phys_start >= section_start as u32 && phys_end < section_end as u32);
+        ranges.retain(|range| range.phys_start != phys_start);
+        ranges.push(FunctionRange {
+            phys_start,
+            phys_end,
+            is_data: false,
+        });
+    }
+    ranges.sort_by_key(|range| range.phys_start);
 
     if ranges.len() == 0 {
         println!("no ranges");
@@ -1728,6 +1746,7 @@ fn handle_segments(file_contents: &Vec<u8>, config: &Config) {
                             subsegment_end,
                             segment.vram,
                             &user_symbols,
+                            &subsegment.function_ranges,
                         );
 
                         let processed_section = ProcessedSection {
@@ -2030,6 +2049,7 @@ fn asm_test_case(asm: String, expected: String, virtual_base_addr: u64) {
         output.len().try_into().unwrap(),
         virtual_base_addr,
         &HashMap::new(),
+        &[],
     );
 
     let trimmed_right: String = expected
@@ -2297,24 +2317,28 @@ mod tests {
                     end: Some(8),
                     segment_type: Some("data".to_string()),
                     file: Some("zero".to_string()),
+                    function_ranges: Vec::new(),
                 },
                 Subsegment {
                     start: 0,
                     end: Some(16),
                     segment_type: Some("c".to_string()),
                     file: Some("zero".to_string()),
+                    function_ranges: Vec::new(),
                 },
                 Subsegment {
                     start: 16,
                     end: Some(24),
                     segment_type: Some("c".to_string()),
                     file: Some("lib/spr/spr_1c".to_string()),
+                    function_ranges: Vec::new(),
                 },
                 Subsegment {
                     start: 24,
                     end: Some(32),
                     segment_type: Some("c".to_string()),
                     file: Some("zero".to_string()),
+                    function_ranges: Vec::new(),
                 },
             ]),
         };
@@ -2757,6 +2781,37 @@ segments:
         find_funcs(&bytes, 0, bytes.len() as u64, &mut ranges);
 
         assert!(ranges.is_empty());
+    }
+
+    #[test]
+    fn test_forced_function_range_recovers_ambiguous_prologue() {
+        let bytes = words_bytes(&[
+            0x0009, 0x2f86, 0x2fe6, 0x4f22, 0x2f06, 0x0009, 0x6fe3, 0x4f26,
+            0x6ef6, 0x000b, 0x68f6,
+        ]);
+
+        let funcs = handle_code_section(
+            &bytes,
+            0,
+            bytes.len() as u64,
+            0x06000000,
+            &HashMap::new(),
+            &[[2, 20]],
+        );
+
+        assert!(funcs.contains_key(&2));
+        assert!(funcs[&2].text.contains("glabel func_06000002"));
+        assert!(funcs[&2].text.contains("/* 0x06000014 0x68F6 */"));
+    }
+
+    #[test]
+    fn test_subsegment_deserializes_forced_function_ranges() {
+        let subsegment: Subsegment = serde_yaml::from_str(
+            "start: 0x100\nend: 0x1ff\ntype: c\nfile: test\nfunction_ranges:\n  - [0x120, 0x180]\n",
+        )
+        .unwrap();
+
+        assert_eq!(subsegment.function_ranges, vec![[0x120, 0x180]]);
     }
 
     #[test]
