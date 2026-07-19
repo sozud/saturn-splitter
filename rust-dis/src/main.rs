@@ -1428,7 +1428,7 @@ fn handle_code_section(
 
     for &[phys_start, phys_end] in forced_function_ranges {
         assert!(phys_start >= section_start as u32 && phys_end < section_end as u32);
-        ranges.retain(|range| range.phys_start != phys_start);
+        ranges.retain(|range| range.phys_end < phys_start || range.phys_start > phys_end);
         ranges.push(FunctionRange {
             phys_start,
             phys_end,
@@ -2802,6 +2802,23 @@ segments:
         assert!(funcs.contains_key(&2));
         assert!(funcs[&2].text.contains("glabel func_06000002"));
         assert!(funcs[&2].text.contains("/* 0x06000014 0x68F6 */"));
+    }
+
+    #[test]
+    fn test_forced_function_range_replaces_nested_auto_range() {
+        let bytes = words_bytes(&[0x0009, 0x2f86, 0x0009, 0x000b, 0x68f6]);
+
+        let funcs = handle_code_section(
+            &bytes,
+            0,
+            bytes.len() as u64,
+            0x06000000,
+            &HashMap::new(),
+            &[[0, 8]],
+        );
+
+        assert!(funcs.contains_key(&0));
+        assert!(!funcs.contains_key(&2));
     }
 
     #[test]
