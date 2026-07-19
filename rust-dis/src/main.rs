@@ -765,6 +765,32 @@ struct FunctionRange {
     is_data: bool,
 }
 
+fn candidate_has_matching_saves(vec: &[u8], func_start: u32, rts: u32) -> bool {
+    let mut saved_gprs = [false; 16];
+    let mut restored_gprs = [false; 16];
+    let mut saved_pr = false;
+    let mut restored_pr = false;
+
+    for pc in (func_start..=rts).step_by(2) {
+        let instr = (vec[pc as usize] as u32) << 8 | vec[pc as usize + 1] as u32;
+        if instr & 0xff0f == 0x2f06 {
+            saved_gprs[((instr >> 4) & 0xf) as usize] = true;
+        } else if instr & 0xf0ff == 0x60f6 {
+            restored_gprs[((instr >> 8) & 0xf) as usize] = true;
+        } else if instr == 0x4f22 {
+            saved_pr = true;
+        } else if instr == 0x4f26 {
+            restored_pr = true;
+        }
+    }
+
+    (!restored_pr || saved_pr)
+        && restored_gprs
+            .iter()
+            .enumerate()
+            .all(|(reg, restored)| !restored || saved_gprs[reg])
+}
+
 fn find_funcs(
     vec: &Vec<u8>,
     section_start: u64,
@@ -840,7 +866,7 @@ fn find_funcs(
             pc -= 2;
         }
 
-        if func_start != 0 {
+        if func_start != 0 && candidate_has_matching_saves(vec, func_start, rts_pos[i]) {
             let range = FunctionRange {
                 phys_start: func_start,
                 phys_end: rts_pos[i] + 2,
@@ -2148,7 +2174,7 @@ mod tests {
     fn test_find_funcs_ignores_rts_inside_referenced_long_literal() {
         let bytes = words_bytes(&[
             0x0009, 0x0009, 0x2f86, 0xd102, 0x0009, 0x0009, 0x0009, 0x0009, 0xf000,
-            0x000b, 0x6ef6, 0x000b, 0x68f6,
+            0x000b, 0x0009, 0x000b, 0x68f6,
         ]);
         let mut ranges = Vec::new();
 
@@ -2713,6 +2739,24 @@ segments:
             assert_eq!(subsegments[2].start, 0x2858);
             assert_eq!(subsegments[2].end, Some(0x7000));
             assert_eq!(subsegments[2].segment_type.as_deref(), Some("data"));
+    }
+
+    #[test]
+    fn test_find_funcs_rejects_epilogue_tail_as_prologue() {
+        let words = [
+            0x2f16, // mov.l r1,@-r15: temporary call save, not a prologue
+            0xd107, 0x6763, 0x410b, 0xe400, 0x6fe3, 0x4f26, 0x000b, 0x6ef6,
+        ];
+        let mut bytes = Vec::new();
+        for word in words {
+            bytes.push((word >> 8) as u8);
+            bytes.push(word as u8);
+        }
+
+        let mut ranges = Vec::new();
+        find_funcs(&bytes, 0, bytes.len() as u64, &mut ranges);
+
+        assert!(ranges.is_empty());
     }
 
     #[test]
