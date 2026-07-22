@@ -6,6 +6,8 @@
 T_BAT.PRG
 /rust-dis/output
 /rust-dis/target
+/rust-dis/build
+/rust-dis/tests/sh2-better-sections/asm
 /rust-dis/tests/sh2-data/asm
 /rust-dis/tests/sh2-data/build
 main.zip
