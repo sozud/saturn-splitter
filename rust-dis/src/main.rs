@@ -1671,7 +1671,9 @@ fn find_include_asm_in_c_file(filename: &str) -> io::Result<HashSet<String>> {
 
     for res in reader.lines() {
         if let Some(caps) = re.captures(&res.unwrap().to_string()) {
+            let asm_id = caps.get(2).unwrap().as_str().trim().to_string();
             let func_name = caps.get(3).unwrap().as_str().to_string();
+            result.insert(asm_id);
             result.insert(func_name);
         }
     }
@@ -1833,8 +1835,9 @@ fn handle_segments(file_contents: &Vec<u8>, config: &Config) {
         } else {
             for (_addr, df) in &processed_section.disassembled_funcs {
                 let func_name = format!("func_{:08X}", df.addr + processed_section.vbase as u32);
+                let asm_id = format!("f{:07X}", df.addr + processed_section.vbase as u32);
 
-                if includes.contains(&func_name) {
+                if includes.contains(&func_name) || includes.contains(&asm_id) {
                     // this has not been decompiled
                     emit_asm_file(
                         format!(
@@ -2188,6 +2191,21 @@ mod tests {
 
     fn words_bytes(words: &[u16]) -> Vec<u8> {
         words.iter().flat_map(|word| word.to_be_bytes()).collect()
+    }
+
+    #[test]
+    fn test_include_asm_records_address_and_semantic_name() {
+        let mut source = NamedTempFile::new().unwrap();
+        writeln!(
+            source,
+            "INCLUDE_ASM(\"asm/saturn/game/f_nonmat\", f6070A60, RunMainEngine);"
+        )
+        .unwrap();
+
+        let includes = find_include_asm_in_c_file(source.path().to_str().unwrap()).unwrap();
+
+        assert!(includes.contains("f6070A60"));
+        assert!(includes.contains("RunMainEngine"));
     }
 
     #[test]
