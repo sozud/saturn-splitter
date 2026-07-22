@@ -90,11 +90,7 @@ fn match_nd8_f(
             if data_labels.contains_key(&thing) {
                 if let Some(value) = data_labels.get(&thing) {
                     // Use the label
-                    string.push_str(&format!(
-                        "mov.w {},r{}",
-                        value.label,
-                        (op >> 8) & 0xf
-                    ));
+                    string.push_str(&format!("mov.w {},r{}", value.label, (op >> 8) & 0xf));
                 }
             } else {
                 // use an address
@@ -123,11 +119,7 @@ fn match_nd8_f(
                 if data_labels.contains_key(&thing) {
                     if let Some(value) = data_labels.get(&thing) {
                         // Use the label
-                        string.push_str(&format!(
-                            "mov.l {},r{}",
-                            value.label,
-                            (op >> 8) & 0xf
-                        ));
+                        string.push_str(&format!("mov.l {},r{}", value.label, (op >> 8) & 0xf));
                     }
                 } else {
                     // use an address
@@ -141,11 +133,7 @@ fn match_nd8_f(
                 if data_labels.contains_key(&test) {
                     if let Some(value) = data_labels.get(&test) {
                         // Use the label
-                        string.push_str(&format!(
-                            "mov.l {},r{}",
-                            value.label,
-                            (op >> 8) & 0xf
-                        ));
+                        string.push_str(&format!("mov.l {},r{}", value.label, (op >> 8) & 0xf));
                     }
                 } else {
                     // use an address
@@ -564,36 +552,12 @@ fn match_f00f(
         0x2008 => string.push_str(&format!("tst r{}, r{}", (op >> 4) & 0xf, (op >> 8) & 0xf)),
         0x200a => string.push_str(&format!("xor r{}, r{}", (op >> 4) & 0xf, (op >> 8) & 0xf)),
         0x200d => string.push_str(&format!("xtrct r{}, r{}", (op >> 4) & 0xf, (op >> 8) & 0xf)),
-        0x2000 => string.push_str(&format!(
-            "mov.b r{},@r{}",
-            (op >> 4) & 0xf,
-            (op >> 8) & 0xf
-        )),
-        0x2001 => string.push_str(&format!(
-            "mov.w r{},@r{}",
-            (op >> 4) & 0xf,
-            (op >> 8) & 0xf
-        )),
-        0x2002 => string.push_str(&format!(
-            "mov.l r{},@r{}",
-            (op >> 4) & 0xf,
-            (op >> 8) & 0xf
-        )),
-        0x6000 => string.push_str(&format!(
-            "mov.b @r{},r{}",
-            (op >> 4) & 0xf,
-            (op >> 8) & 0xf
-        )),
-        0x6001 => string.push_str(&format!(
-            "mov.w @r{},r{}",
-            (op >> 4) & 0xf,
-            (op >> 8) & 0xf
-        )),
-        0x6002 => string.push_str(&format!(
-            "mov.l @r{},r{}",
-            (op >> 4) & 0xf,
-            (op >> 8) & 0xf
-        )),
+        0x2000 => string.push_str(&format!("mov.b r{},@r{}", (op >> 4) & 0xf, (op >> 8) & 0xf)),
+        0x2001 => string.push_str(&format!("mov.w r{},@r{}", (op >> 4) & 0xf, (op >> 8) & 0xf)),
+        0x2002 => string.push_str(&format!("mov.l r{},@r{}", (op >> 4) & 0xf, (op >> 8) & 0xf)),
+        0x6000 => string.push_str(&format!("mov.b @r{},r{}", (op >> 4) & 0xf, (op >> 8) & 0xf)),
+        0x6001 => string.push_str(&format!("mov.w @r{},r{}", (op >> 4) & 0xf, (op >> 8) & 0xf)),
+        0x6002 => string.push_str(&format!("mov.l @r{},r{}", (op >> 4) & 0xf, (op >> 8) & 0xf)),
         0x000f => string.push_str(&format!(
             "mac.l @r{}+, @r{}+",
             (op >> 4) & 0xf,
@@ -827,9 +791,7 @@ fn find_funcs(
         let has_literal_rts = literal_rts.iter().any(|&offset| {
             offset > prev_rts
                 && offset < rts_pos[i]
-                && ((vec[offset as usize] as u32) << 8
-                    | vec[offset as usize + 1] as u32)
-                    == 0x000b
+                && ((vec[offset as usize] as u32) << 8 | vec[offset as usize + 1] as u32) == 0x000b
         });
         let mut func_start = 0;
         let mut longest_preamble = 0;
@@ -845,8 +807,8 @@ fn find_funcs(
                 let mut run_len = 1;
                 while run_start >= prev_rts + 2 && run_start > 2 {
                     let previous = run_start - 2;
-                    let previous_instr = (vec[previous as usize] as u32) << 8
-                        | vec[(previous + 1) as usize] as u32;
+                    let previous_instr =
+                        (vec[previous as usize] as u32) << 8 | vec[(previous + 1) as usize] as u32;
                     if previous_instr & 0xFF06 != 0x2F06 {
                         break;
                     }
@@ -995,9 +957,7 @@ fn find_jump_tables(
                 let immediate_pos = immediate_address as usize;
                 let immediate = ((file_contents[immediate_pos] as u32) << 8)
                     | file_contents[immediate_pos + 1] as u32;
-                if immediate & 0xf000 == 0xe000
-                    && ((immediate >> 8) & 0xf) == bound_register
-                {
+                if immediate & 0xf000 == 0xe000 && ((immediate >> 8) & 0xf) == bound_register {
                     max_index = Some(immediate & 0xff);
                     break;
                 }
@@ -1160,11 +1120,7 @@ fn find_data_labels(v_addr: u32, op: u32, data_labels: &mut HashMap<u32, DataLab
     }
 }
 
-fn literal_feeds_call(
-    file_contents: &Vec<u8>,
-    source: u32,
-    virtual_base_addr: u64,
-) -> bool {
+fn literal_feeds_call(file_contents: &Vec<u8>, source: u32, virtual_base_addr: u64) -> bool {
     let Some(source_offset) = source.checked_sub(virtual_base_addr as u32) else {
         return false;
     };
@@ -1172,8 +1128,8 @@ fn literal_feeds_call(
     if source_offset + 1 >= file_contents.len() {
         return false;
     }
-    let load = ((file_contents[source_offset] as u32) << 8)
-        | file_contents[source_offset + 1] as u32;
+    let load =
+        ((file_contents[source_offset] as u32) << 8) | file_contents[source_offset + 1] as u32;
     if load & 0xf000 != 0xd000 {
         return false;
     }
@@ -1209,6 +1165,7 @@ struct Subsegment {
     segment_type: Option<String>,
     file: Option<String>,
     function_ranges: Vec<[u32; 2]>,
+    data_ranges: Vec<[u32; 2]>,
 }
 
 impl<'de> serde::Deserialize<'de> for Subsegment {
@@ -1227,6 +1184,8 @@ impl<'de> serde::Deserialize<'de> for Subsegment {
                 file: Option<String>,
                 #[serde(default)]
                 function_ranges: Vec<[u32; 2]>,
+                #[serde(default)]
+                data_ranges: Vec<[u32; 2]>,
             },
             Compact((u64, String, String)),
         }
@@ -1238,12 +1197,14 @@ impl<'de> serde::Deserialize<'de> for Subsegment {
                 segment_type,
                 file,
                 function_ranges,
+                data_ranges,
             } => Ok(Self {
                 start,
                 end,
                 segment_type,
                 file,
                 function_ranges,
+                data_ranges,
             }),
             SubsegmentSyntax::Compact((start, segment_type, file)) => Ok(Self {
                 start,
@@ -1251,6 +1212,7 @@ impl<'de> serde::Deserialize<'de> for Subsegment {
                 segment_type: Some(segment_type),
                 file: Some(file),
                 function_ranges: Vec::new(),
+                data_ranges: Vec::new(),
             }),
         }
     }
@@ -1301,10 +1263,8 @@ fn read_user_symbols(filename: &str) -> HashMap<u32, String> {
     let Ok(contents) = std::fs::read_to_string(filename) else {
         return HashMap::new();
     };
-    let pattern = Regex::new(
-        r"^\s*([A-Za-z_][A-Za-z0-9_]*)\s*=\s*(0x[0-9A-Fa-f]+)\s*;\s*$",
-    )
-    .unwrap();
+    let pattern =
+        Regex::new(r"^\s*([A-Za-z_][A-Za-z0-9_]*)\s*=\s*(0x[0-9A-Fa-f]+)\s*;\s*$").unwrap();
     let mut symbols = HashMap::new();
     for line in contents.lines() {
         let Some(captures) = pattern.captures(line) else {
@@ -1321,11 +1281,7 @@ fn read_user_symbols(filename: &str) -> HashMap<u32, String> {
     symbols
 }
 
-fn format_literal(
-    value: u32,
-    user_symbols: &HashMap<u32, String>,
-    _allow_symbol: bool,
-) -> String {
+fn format_literal(value: u32, user_symbols: &HashMap<u32, String>, _allow_symbol: bool) -> String {
     if let Some(symbol) = user_symbols.get(&value) {
         return symbol.clone();
     }
@@ -1421,6 +1377,7 @@ fn handle_code_section(
     virtual_base_addr: u64,
     user_symbols: &HashMap<u32, String>,
     forced_function_ranges: &[[u32; 2]],
+    forced_data_ranges: &[[u32; 2]],
 ) -> (BTreeMap<u32, DisassembledFunc>) {
     let len = file_contents.len();
     let mut ranges = Vec::<FunctionRange>::new();
@@ -1436,6 +1393,17 @@ fn handle_code_section(
         });
     }
     ranges.sort_by_key(|range| range.phys_start);
+
+    for &[phys_start, phys_end] in forced_data_ranges {
+        assert!(phys_start >= section_start as u32 && phys_end < section_end as u32);
+        assert!(phys_start <= phys_end);
+    }
+
+    let is_forced_data = |address: u32| {
+        forced_data_ranges
+            .iter()
+            .any(|range| address >= range[0] && address <= range[1])
+    };
 
     if ranges.len() == 0 {
         println!("no ranges");
@@ -1456,6 +1424,9 @@ fn handle_code_section(
     );
 
     for i in (section_start..section_end).step_by(2) {
+        if is_forced_data(i as u32) {
+            continue;
+        }
         let ii = i as usize;
         let instr: u32 = ((file_contents[ii] as u32) << 8) | file_contents[ii + 1] as u32;
 
@@ -1579,6 +1550,16 @@ fn handle_code_section(
             continue;
         }
 
+        if is_forced_data(i as u32) {
+            if let Some(func) = disassembled_funcs.get_mut(&(start_address_extended as u32)) {
+                func.text.push_str(&format!(
+                    "/* 0x{:08X} */ .word 0x{:04X}\n",
+                    virtual_addr, instr
+                ));
+            }
+            continue;
+        }
+
         // only disasm if we are in a func
         if is_in_func {
             let mut string = String::new();
@@ -1685,12 +1666,10 @@ fn handle_segments(file_contents: &Vec<u8>, config: &Config) {
     let mut processed_sections = Vec::<ProcessedSection>::new();
     if let Some(segments) = &config.segments {
         for segment in segments {
-            let user_symbols = read_user_symbols(
-                &format!(
-                    "{}/{}_user_syms.txt",
-                    config.options.syms_path, segment.name
-                ),
-            );
+            let user_symbols = read_user_symbols(&format!(
+                "{}/{}_user_syms.txt",
+                config.options.syms_path, segment.name
+            ));
             println!("Segment Name: {}", segment.name);
             println!("Segment Type: {}", segment.segment_type);
             println!("Segment Start: {}", segment.start);
@@ -1749,6 +1728,7 @@ fn handle_segments(file_contents: &Vec<u8>, config: &Config) {
                             segment.vram,
                             &user_symbols,
                             &subsegment.function_ranges,
+                            &subsegment.data_ranges,
                         );
 
                         let processed_section = ProcessedSection {
@@ -1774,28 +1754,24 @@ fn handle_segments(file_contents: &Vec<u8>, config: &Config) {
             let segment_name = &segs[0].name;
             let base_addr = &segs[0].vram;
             let path = &config.options.src_path;
-            for seg in segs
-            {
-                if let Some(subsegments) = &seg.subsegments 
-                {
-                    for subseg in subsegments
-                    {
+            for seg in segs {
+                if let Some(subsegments) = &seg.subsegments {
+                    for subseg in subsegments {
                         println!("seg {:#?}", subseg);
                         // // need to check the designated file rather than just the segment
                         // // collect all c files specified in the yaml, then check all of those
                         // // and add to includes
-    
-                        if let Some(subseg_file) = &subseg.file
-                        {
+
+                        if let Some(subseg_file) = &subseg.file {
                             let c_filename = format!("{}/{}.c", path, subseg_file);
-    
+
                             println!("checking {}", c_filename);
                             if Path::new(&c_filename).exists() {
                                 match find_include_asm_in_c_file(&c_filename) {
                                     Ok(set) => {
                                         println!("adding {:#?}", set);
                                         includes.extend(set)
-                                    },
+                                    }
                                     Err(err) => {
                                         eprintln!("Error reading the file: {}", err);
                                     }
@@ -1804,7 +1780,6 @@ fn handle_segments(file_contents: &Vec<u8>, config: &Config) {
                         }
                     }
                 }
-
             }
         }
     }
@@ -2053,6 +2028,7 @@ fn asm_test_case(asm: String, expected: String, virtual_base_addr: u64) {
         virtual_base_addr,
         &HashMap::new(),
         &[],
+        &[],
     );
 
     let trimmed_right: String = expected
@@ -2156,10 +2132,7 @@ fn gen_ld_script(
         if check_layout {
             code.push_str(&format!(
                 "        ASSERT(. - ADDR(.{}) == 0x{:X}, \"{} {} starts at the wrong offset\");\n",
-                zero_prefix,
-                input.start,
-                input.object,
-                input.section,
+                zero_prefix, input.start, input.object, input.section,
             ));
         }
         let path = if obj_path.is_empty() {
@@ -2211,8 +2184,8 @@ mod tests {
     #[test]
     fn test_find_funcs_ignores_rts_inside_referenced_long_literal() {
         let bytes = words_bytes(&[
-            0x0009, 0x0009, 0x2f86, 0xd102, 0x0009, 0x0009, 0x0009, 0x0009, 0xf000,
-            0x000b, 0x0009, 0x000b, 0x68f6,
+            0x0009, 0x0009, 0x2f86, 0xd102, 0x0009, 0x0009, 0x0009, 0x0009, 0xf000, 0x000b, 0x0009,
+            0x000b, 0x68f6,
         ]);
         let mut ranges = Vec::new();
 
@@ -2238,8 +2211,7 @@ mod tests {
     #[test]
     fn test_find_funcs_keeps_rts_at_start_of_long_target() {
         let bytes = words_bytes(&[
-            0x0009, 0x0009, 0x2f86, 0xd102, 0x0009, 0x0009, 0x0009, 0x0009, 0x000b,
-            0x1234,
+            0x0009, 0x0009, 0x2f86, 0xd102, 0x0009, 0x0009, 0x0009, 0x0009, 0x000b, 0x1234,
         ]);
         let mut ranges = Vec::new();
 
@@ -2253,8 +2225,7 @@ mod tests {
     #[test]
     fn test_find_funcs_keeps_rts_targeted_by_word_pattern() {
         let bytes = words_bytes(&[
-            0x0009, 0x0009, 0x2f86, 0x9303, 0x0009, 0x0009, 0x0009, 0x0009, 0x000b,
-            0x1234,
+            0x0009, 0x0009, 0x2f86, 0x9303, 0x0009, 0x0009, 0x0009, 0x0009, 0x000b, 0x1234,
         ]);
         let mut ranges = Vec::new();
 
@@ -2268,8 +2239,8 @@ mod tests {
     #[test]
     fn test_find_funcs_prefers_full_prologue_over_internal_push() {
         let bytes = words_bytes(&[
-            0x0009, 0x0009, 0x2f86, 0x2f96, 0x2fa6, 0xd102, 0x0009, 0x0009, 0x0009,
-            0x0009, 0xf000, 0x000b, 0x2fd6, 0x0009, 0x000b, 0x68f6,
+            0x0009, 0x0009, 0x2f86, 0x2f96, 0x2fa6, 0xd102, 0x0009, 0x0009, 0x0009, 0x0009, 0xf000,
+            0x000b, 0x2fd6, 0x0009, 0x000b, 0x68f6,
         ]);
         let mut ranges = Vec::new();
 
@@ -2336,6 +2307,7 @@ mod tests {
                     segment_type: Some("data".to_string()),
                     file: Some("zero".to_string()),
                     function_ranges: Vec::new(),
+                    data_ranges: Vec::new(),
                 },
                 Subsegment {
                     start: 0,
@@ -2343,6 +2315,7 @@ mod tests {
                     segment_type: Some("c".to_string()),
                     file: Some("zero".to_string()),
                     function_ranges: Vec::new(),
+                    data_ranges: Vec::new(),
                 },
                 Subsegment {
                     start: 16,
@@ -2350,6 +2323,7 @@ mod tests {
                     segment_type: Some("c".to_string()),
                     file: Some("lib/spr/spr_1c".to_string()),
                     function_ranges: Vec::new(),
+                    data_ranges: Vec::new(),
                 },
                 Subsegment {
                     start: 24,
@@ -2357,6 +2331,7 @@ mod tests {
                     segment_type: Some("c".to_string()),
                     file: Some("zero".to_string()),
                     function_ranges: Vec::new(),
+                    data_ranges: Vec::new(),
                 },
             ]),
         };
@@ -2412,11 +2387,31 @@ segments:
         assert_eq!(
             inputs,
             vec![
-                LinkerInput { start: 0, object: "header.o".to_string(), section: ".data".to_string() },
-                LinkerInput { start: 8, object: "main.o".to_string(), section: ".text".to_string() },
-                LinkerInput { start: 0x20, object: "animations.o".to_string(), section: ".data".to_string() },
-                LinkerInput { start: 0x28, object: "tables.o".to_string(), section: ".rodata".to_string() },
-                LinkerInput { start: 0x30, object: "raw_tail.o".to_string(), section: ".text".to_string() },
+                LinkerInput {
+                    start: 0,
+                    object: "header.o".to_string(),
+                    section: ".data".to_string()
+                },
+                LinkerInput {
+                    start: 8,
+                    object: "main.o".to_string(),
+                    section: ".text".to_string()
+                },
+                LinkerInput {
+                    start: 0x20,
+                    object: "animations.o".to_string(),
+                    section: ".data".to_string()
+                },
+                LinkerInput {
+                    start: 0x28,
+                    object: "tables.o".to_string(),
+                    section: ".rodata".to_string()
+                },
+                LinkerInput {
+                    start: 0x30,
+                    object: "raw_tail.o".to_string(),
+                    section: ".text".to_string()
+                },
             ]
         );
 
@@ -2755,32 +2750,32 @@ segments:
 
     #[test]
     fn test_parse_tt_000_yaml() {
-            let config = parse_yaml2("./config.yaml".to_string());
-    
-            let segments = config.segments.expect("Missing segments");
-    
-            assert_eq!(segments.len(), 1);
-    
-            let seg = &segments[0];
-            assert_eq!(seg.name, "tt_000");
-            assert_eq!(seg.segment_type, "code");
-            assert_eq!(seg.start, 0);
-            assert_eq!(seg.vram, 0x80170000);
-    
-            let subsegments = seg.subsegments.as_ref().unwrap();
-            assert_eq!(subsegments.len(), 3);
-    
-            assert_eq!(subsegments[0].start, 0x0);
-            assert_eq!(subsegments[0].end, Some(0x5F));
-            assert_eq!(subsegments[0].segment_type.as_deref(), Some("data"));
-    
-            assert_eq!(subsegments[1].start, 0x60);
-            assert_eq!(subsegments[1].end, Some(0x2857));
-            assert_eq!(subsegments[1].segment_type.as_deref(), Some("c"));
-    
-            assert_eq!(subsegments[2].start, 0x2858);
-            assert_eq!(subsegments[2].end, Some(0x7000));
-            assert_eq!(subsegments[2].segment_type.as_deref(), Some("data"));
+        let config = parse_yaml2("./config.yaml".to_string());
+
+        let segments = config.segments.expect("Missing segments");
+
+        assert_eq!(segments.len(), 1);
+
+        let seg = &segments[0];
+        assert_eq!(seg.name, "tt_000");
+        assert_eq!(seg.segment_type, "code");
+        assert_eq!(seg.start, 0);
+        assert_eq!(seg.vram, 0x80170000);
+
+        let subsegments = seg.subsegments.as_ref().unwrap();
+        assert_eq!(subsegments.len(), 3);
+
+        assert_eq!(subsegments[0].start, 0x0);
+        assert_eq!(subsegments[0].end, Some(0x5F));
+        assert_eq!(subsegments[0].segment_type.as_deref(), Some("data"));
+
+        assert_eq!(subsegments[1].start, 0x60);
+        assert_eq!(subsegments[1].end, Some(0x2857));
+        assert_eq!(subsegments[1].segment_type.as_deref(), Some("c"));
+
+        assert_eq!(subsegments[2].start, 0x2858);
+        assert_eq!(subsegments[2].end, Some(0x7000));
+        assert_eq!(subsegments[2].segment_type.as_deref(), Some("data"));
     }
 
     #[test]
@@ -2804,8 +2799,7 @@ segments:
     #[test]
     fn test_forced_function_range_recovers_ambiguous_prologue() {
         let bytes = words_bytes(&[
-            0x0009, 0x2f86, 0x2fe6, 0x4f22, 0x2f06, 0x0009, 0x6fe3, 0x4f26,
-            0x6ef6, 0x000b, 0x68f6,
+            0x0009, 0x2f86, 0x2fe6, 0x4f22, 0x2f06, 0x0009, 0x6fe3, 0x4f26, 0x6ef6, 0x000b, 0x68f6,
         ]);
 
         let funcs = handle_code_section(
@@ -2815,6 +2809,7 @@ segments:
             0x06000000,
             &HashMap::new(),
             &[[2, 20]],
+            &[],
         );
 
         assert!(funcs.contains_key(&2));
@@ -2833,6 +2828,7 @@ segments:
             0x06000000,
             &HashMap::new(),
             &[[0, 8]],
+            &[],
         );
 
         assert!(funcs.contains_key(&0));
@@ -2840,21 +2836,40 @@ segments:
     }
 
     #[test]
-    fn test_subsegment_deserializes_forced_function_ranges() {
+    fn test_subsegment_deserializes_forced_ranges() {
         let subsegment: Subsegment = serde_yaml::from_str(
-            "start: 0x100\nend: 0x1ff\ntype: c\nfile: test\nfunction_ranges:\n  - [0x120, 0x180]\n",
+            "start: 0x100\nend: 0x1ff\ntype: c\nfile: test\nfunction_ranges:\n  - [0x120, 0x180]\ndata_ranges:\n  - [0x140, 0x15f]\n",
         )
         .unwrap();
 
         assert_eq!(subsegment.function_ranges, vec![[0x120, 0x180]]);
+        assert_eq!(subsegment.data_ranges, vec![[0x140, 0x15f]]);
+    }
+
+    #[test]
+    fn test_forced_data_range_is_emitted_as_words_inside_function() {
+        let bytes = words_bytes(&[0x2fe6, 0xafff, 0x0009, 0x1234, 0x5678, 0x000b, 0x0009]);
+
+        let funcs = handle_code_section(
+            &bytes,
+            0,
+            bytes.len() as u64,
+            0x06000000,
+            &HashMap::new(),
+            &[[0, 12]],
+            &[[6, 9]],
+        );
+
+        assert!(funcs[&0].text.contains("/* 0x06000006 */ .word 0x1234"));
+        assert!(funcs[&0].text.contains("/* 0x06000008 */ .word 0x5678"));
     }
 
     #[test]
     fn test_mova_jump_table() {
         let mut bytes = vec![0u8; 0x40];
         let words = [
-            0xe107, 0x3216, 0x6123, 0x311c, 0xc702, 0x011d, 0x301c, 0x402b, 0x0009,
-            0x0009, 0x0010, 0x0012, 0x0014, 0x0016, 0x0018, 0x001a, 0x001c, 0x001e,
+            0xe107, 0x3216, 0x6123, 0x311c, 0xc702, 0x011d, 0x301c, 0x402b, 0x0009, 0x0009, 0x0010,
+            0x0012, 0x0014, 0x0016, 0x0018, 0x001a, 0x001c, 0x001e,
         ];
         for (index, word) in words.iter().enumerate() {
             bytes[index * 2] = (word >> 8) as u8;
@@ -2982,7 +2997,10 @@ segments:
         add_data_label(0x060a91e0, 0x060a9298, 4, &mut data_labels);
 
         assert_eq!(branch_labels.get(&0x060a9200).unwrap(), ".L060A9200");
-        assert_eq!(data_labels.get(&0x060a9298).unwrap().label, ".Ldat_060A9298");
+        assert_eq!(
+            data_labels.get(&0x060a9298).unwrap().label,
+            ".Ldat_060A9298"
+        );
     }
 
     #[test]
